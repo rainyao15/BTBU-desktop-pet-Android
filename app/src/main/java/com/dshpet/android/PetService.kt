@@ -25,6 +25,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.graphics.drawable.GradientDrawable
+import android.widget.Chronometer
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -112,6 +113,9 @@ class PetService : Service() {
     private var dbPet: Pet? = null
     private var dbTitle: TextView? = null
     private var dbBody: TextView? = null
+    private var dbHead: TextView? = null
+    private var dbPill: View? = null
+    private var dbTimer: android.widget.Chronometer? = null
     private var dbSig = ""
     private var tapCount = 0
     private var tapWindowMs = 0L
@@ -457,7 +461,22 @@ class PetService : Service() {
     private fun dpPx(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     /**
-     * 常驻气泡：白底 + 蓝边 + 小三角，贴在宠物头顶，显示「余额」+「下一节课」。
+     * 常驻气泡：dsh 余额挂件同款「手绘思考气泡」。
+     *
+     * 白底 + 深藏青手绘描边椭圆（ThoughtBubble 画的），下面串 3 个圆点当尾巴。
+     * 三行文字照参考图的比例排版：
+     *   标题（北工商 · 第 N 周，小号粗体）
+     *   大数字（网 15.00  卡 25.80）
+     *   副行（下一节课，浅蓝灰）
+     * 底部一条绿色倒计时：正在上课数到下课，否则数到下一节（Chronometer，系统驱动，零耗电）。
+     * 点它 → 打开整周课表。和台词气泡是两个独立窗口，互不打断。
+     */
+    /**
+     * 常驻气泡：dsh 鲸鱼挂件同款「手绘思考气泡」（几何见 res/drawable/btbu_bubble.xml）。
+     *
+     * 版式照上游：标题（北工商 · 第 N 周）/ 大数字（网 15.00  卡 25.80）/ 副行（下一节课）
+     * + 底部绿色倒计时药丸（正在上课数到下课，否则数到下一节；Chronometer 系统驱动，零耗电）。
+     * 字号随气泡宽度按上游 u 比例联动，ThoughtBubble 会按内容自动缩字，气泡本体永不变形。
      * 点它 → 打开整周课表。和台词气泡是两个独立窗口，互不打断。
      */
     private fun ensureDataBubble() {
@@ -466,31 +485,56 @@ class PetService : Service() {
         val pet = held.firstOrNull()?.pet ?: return
         val d = resources.displayMetrics.density
 
-        val t1 = TextView(this).apply {
-            setTextColor(0xFF16223B.toInt())
-            textSize = 13.5f
-            typeface = Typeface.DEFAULT_BOLD
-            includeFontPadding = false
+        // 字号/颜色都由 ThoughtBubble.bind() 统一管，这里只负责搭结构
+        val head = TextView(this)
+        val main = TextView(this)
+        val sub = TextView(this).apply { maxLines = 2 }
+        val chip = TextView(this).apply { text = "课" }
+        val timer = Chronometer(this).apply { format = "距上课  %s" }
+        val pill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            setPadding(0, (6 * d).toInt(), 0, 0)
+            addView(
+                chip,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { gravity = Gravity.CENTER_VERTICAL; rightMargin = (4 * d).toInt() },
+            )
+            addView(
+                timer,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { gravity = Gravity.CENTER_VERTICAL },
+            )
         }
-        val t2 = TextView(this).apply {
-            setTextColor(0xFF3A4A6B.toInt())
-            textSize = 11f
-            includeFontPadding = false
-            setPadding(0, (2 * d).toInt(), 0, 0)
-        }
-        dbTitle = t1
-        dbBody = t2
-
-        val box = LinearLayout(this).apply {
+        val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding((12 * d).toInt(), (8 * d).toInt(), (12 * d).toInt(), (8 * d).toInt())
-            background = GradientDrawable().apply {
-                cornerRadius = 14f * d
-                setColor(0xF2FFFFFF.toInt())
-                setStroke((1.5f * d).toInt(), 0x664E6BFF.toInt())
-            }
-            addView(t1)
-            addView(t2)
+            gravity = Gravity.CENTER
+            addView(head)
+            addView(main)
+            addView(sub)
+            addView(pill)
+        }
+        dbHead = head
+        dbTitle = main
+        dbBody = sub
+        dbPill = pill
+        dbTimer = timer
+
+        val box = com.dshpet.android.btbu.ThoughtBubble(this).apply {
+            addView(
+                col,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            bind(head, main, sub)
+            bindCountdown(chip, timer)
             setOnClickListener {
                 try {
                     startActivity(
@@ -503,13 +547,12 @@ class PetService : Service() {
             }
         }
 
-        val maxW = (resources.displayMetrics.widthPixels * 0.7f).toInt()
+        val bw = bubbleWidthPx(pet)
         box.measure(
-            View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(bw, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
         )
-        val bw = box.measuredWidth.coerceAtLeast(dpPx(60))
-        val bh = box.measuredHeight.coerceAtLeast(dpPx(30))
+        val bh = box.measuredHeight.coerceAtLeast(dpPx(40))
         val lp = WindowManager.LayoutParams(
             bw, bh,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -531,6 +574,13 @@ class PetService : Service() {
         }
     }
 
+    /** 气泡宽度跟着宠物大小走（上游是宽 1026 : 高 700 的固定比例，所以只定宽），再夹在屏幕内 */
+    private fun bubbleWidthPx(pet: Pet): Int {
+        val screenW = resources.displayMetrics.widthPixels
+        val want = (pet.sizePx * 0.95f).toInt()
+        return minOf(want, (screenW * 0.72f).toInt()).coerceAtLeast(dpPx(150))
+    }
+
     private fun updateDataBubble(force: Boolean = false) {
         val st = try {
             com.dshpet.android.btbu.BtbuSync.state(this)
@@ -538,22 +588,48 @@ class PetService : Service() {
             null
         }
         val hasData = st != null && st.hasData
-        val sig = if (hasData) st.week.toString() + "|" + st.balanceLine() + "|" + st.nextLine() else "empty"
+
+        // 倒计时是秒级变化的，不能进 sig 去重 —— 每次进来都重新上弦
+        if (hasData) {
+            dbHead?.text = st.headLine()
+            val remain = st.countdownRemainMs()
+            if (remain != null && remain > 0) {
+                dbPill?.visibility = View.VISIBLE
+                dbTimer?.let { t ->
+                    t.format = if (st.current != null) "距下课  %s" else "距上课  %s"
+                    t.base = android.os.SystemClock.elapsedRealtime() + remain
+                    t.isCountDown = true
+                    t.start()
+                }
+            } else {
+                dbPill?.visibility = View.GONE
+                dbTimer?.stop()
+            }
+        } else {
+            dbHead?.text = "北工商桌宠"
+            dbPill?.visibility = View.GONE
+            dbTimer?.stop()
+        }
+
+        val sig = if (hasData) {
+            st.week.toString() + "|" + st.balanceLine() + "|" + st.nextLine()
+        } else {
+            "empty"
+        }
         if (!force && sig == dbSig) return
         dbSig = sig
         dbTitle?.text = if (hasData) st.balanceLine() else "点这里填学号"
-        dbBody?.text = if (hasData) st.nextLine() else "北工商桌宠 · 还没同步"
+        dbBody?.text = if (hasData) st.nextLine() else "还没同步 · 点我填学号"
 
         val box = dbRoot ?: return
         val pet = dbPet ?: return
         val lp = dbParams ?: return
-        val maxW = (resources.displayMetrics.widthPixels * 0.7f).toInt()
+        val bw = bubbleWidthPx(pet)
         box.measure(
-            View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(bw, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
         )
-        val bw = box.measuredWidth.coerceAtLeast(dpPx(60))
-        val bh = box.measuredHeight.coerceAtLeast(dpPx(30))
+        val bh = box.measuredHeight.coerceAtLeast(dpPx(40))
         lp.width = bw
         lp.height = bh
         placeBubble(lp, bw, bh, pet)
@@ -586,8 +662,11 @@ class PetService : Service() {
         dbRoot = null
         dbParams = null
         dbPet = null
+        dbHead = null
         dbTitle = null
         dbBody = null
+        dbPill = null
+        dbTimer = null
         dbSig = ""
     }
 

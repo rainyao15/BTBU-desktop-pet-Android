@@ -3,7 +3,9 @@ package com.dshpet.android.btbu
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Duration
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 /**
@@ -45,6 +47,27 @@ class BtbuStore(ctx: Context) {
                 "$d ${next.start} ${next.name} @${next.room}"
             }
             else -> "最近没课，摸鱼"
+        }
+
+        /** 标题行，例如 "北工商 · 第 8 周" */
+        fun headLine(): String = "北工商 · 第 $week 周"
+
+        /**
+         * 倒计时还剩多少毫秒：正在上课 → 数到下课；还没上 → 数到下一节开始。
+         * 没课 / 已经超时返回 null。桌面挂件和头顶气泡共用这一份逻辑，别各写一套。
+         */
+        fun countdownRemainMs(now: LocalDateTime = LocalDateTime.now()): Long? {
+            val c = current ?: next ?: return null
+            val fmt = DateTimeFormatter.ofPattern("HH:mm")
+            val start = runCatching { LocalTime.parse(c.start, fmt) }.getOrNull() ?: return null
+            val end = runCatching { LocalTime.parse(c.end, fmt) }.getOrNull()
+            val target = if (current != null && end != null) {
+                now.toLocalDate().atTime(end)                       // 正在上 → 数到下课
+            } else {
+                now.toLocalDate().atTime(start).plusDays(nextInDays.toLong()) // 跨天按天补
+            }
+            val ms = Duration.between(now, target).toMillis()
+            return if (ms > 0) ms else null
         }
     }
 

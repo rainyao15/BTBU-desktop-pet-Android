@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手绘思考气泡：几何 100% 照抄 DSH 鲸鱼挂件（MeteorNOX/DeepSeek-Balance-Whale-Widget, MIT）。
+  上游不是图片素材，是代码里的内联 SVG（viewBox 0 0 1026 700），路径原文见
+  assets/whale-widget.js -> FRAME_CLASSIC_BIG_D：
+    M 827 248 A 373 232 0 1 0 81 246 A 373 232 0 0 0 301 465
+              A 57 32 10 0 0 413 484 A 373 232 0 0 0 827 248 Z
+  外加两个小气泡 ellipse(352,561 r37.5x26) / ellipse(442,646 r24.5x18)。
+  描边 #203170 宽 18，round join / round cap，填充纯白。
+  这里只把语法从 SVG 换成 Android pathData，坐标一个没动。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="205.2dp"
+    android:height="140dp"
+    android:viewportWidth="1026"
+    android:viewportHeight="700">
+
+    <!-- 大气泡 + 尾巴（一条连通路径：整圈描边，尾巴处不会出现内部横线） -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M827,248 A373,232 0 1,0 81,246 A373,232 0 0,0 301,465 A57,32 10 0,0 413,484 A373,232 0 0,0 827,248 Z"
+        android:strokeColor="#203170"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="18" />
+
+    <!-- 小气泡 1 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M314.5,561 A37.5,26 0 1,0 389.5,561 A37.5,26 0 1,0 314.5,561 Z"
+        android:strokeColor="#203170"
+        android:strokeLineJoin="round"
+        android:strokeWidth="18" />
+
+    <!-- 小气泡 2 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M417.5,646 A24.5,18 0 1,0 466.5,646 A24.5,18 0 1,0 417.5,646 Z"
+        android:strokeColor="#203170"
+        android:strokeLineJoin="round"
+        android:strokeWidth="18" />
+</vector>
