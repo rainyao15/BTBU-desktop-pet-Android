@@ -6,7 +6,7 @@ import org.json.JSONObject
 /**
  * 数据模型 + 解析。
  *
- * 字段名全部来自真实响应（captures/*.json），不是猜的：
+ * 字段名全部来自真实响应（captures 目录里的 json 响应），不是猜的：
  *   一卡通  allPurposeCardVO.balance          = "2580"      ← 分，÷100 → 25.80 元
  *   网费    result.mainBalance                = 15.0        ← 元，浮动
  *   课表    courseList[].kcmc / skxq / skjc / cxjc / skzc / jash / jgmc

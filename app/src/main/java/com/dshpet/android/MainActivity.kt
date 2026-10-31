@@ -471,8 +471,7 @@ class MainActivity : Activity() {
                 val min = ((System.currentTimeMillis() - st.syncedAt) / 60_000L).toInt()
                 "第${st.week}周 · ${st.balanceLine()} · 同步于 " +
                     (if (min < 1) "刚刚" else "${min}分钟前") +
-                    "
-" + st.nextLine()
+                    "\n" + st.nextLine()
             }
         }
     }
