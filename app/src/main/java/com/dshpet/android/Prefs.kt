@@ -106,8 +106,12 @@ object Prefs {
         return gen
     }
 
-    /** 桌面小卡（HUD）开关，默认开 */
-    fun hudOn(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_HUD, true)
+    /**
+     * 悬浮小卡（HUD）开关，默认**关**：
+     * 数据现在由「宠物头顶的常驻气泡 + 桌面挂件」承担，再加一块矩形卡片就重复了。
+     * 想回到第一轮那种独立卡片，在这里打开即可。
+     */
+    fun hudOn(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_HUD, false)
 
     fun setHudOn(ctx: Context, v: Boolean) {
         sp(ctx).edit().putBoolean(KEY_HUD, v).apply()

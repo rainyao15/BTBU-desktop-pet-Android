@@ -52,6 +52,7 @@ class MainActivity : Activity() {
     private lateinit var btnBtbuLogin: TextView
     private lateinit var btnBtbuHud: TextView
     private lateinit var accStatus: TextView
+    private lateinit var btnBtbuSchedule: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,6 +81,7 @@ class MainActivity : Activity() {
         btnBtbuLogin = findViewById(R.id.btnBtbuLogin)
         btnBtbuHud = findViewById(R.id.btnBtbuHud)
         accStatus = findViewById(R.id.accStatus)
+        btnBtbuSchedule = findViewById(R.id.btnBtbuSchedule)
         bindBtbu()
 
         // 宠物名字来自 pet-config.json（现在是「大肥鱼」）
@@ -441,6 +443,14 @@ class MainActivity : Activity() {
                         Toast.LENGTH_SHORT,
                     ).show()
                 }
+            }
+        }
+
+        btnBtbuSchedule.setOnClickListener {
+            try {
+                startActivity(android.content.Intent(this, com.dshpet.android.btbu.ScheduleActivity::class.java))
+            } catch (t: Throwable) {
+                Diag.record(this, "打开课表失败", t)
             }
         }
 

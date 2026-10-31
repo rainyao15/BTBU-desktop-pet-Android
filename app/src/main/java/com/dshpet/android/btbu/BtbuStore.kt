@@ -189,6 +189,26 @@ class BtbuStore(ctx: Context) {
         }
     }
 
+    // ---------------- 给"整周课表"页用的读取接口 ----------------
+
+    /** 某一周要上的课（已按 skzc 位图过滤） */
+    fun coursesOf(week: Int): List<Course> = readCourses().filter { it.activeAt(week) }
+
+    fun allCourses(): List<Course> = readCourses()
+
+    fun lessonsOf(): Map<Int, Pair<String, String>> = readLessons()
+
+    fun totalWeekOf(): Int = sp.getInt("totalWeek", 25)
+
+    fun weekOf(): Int = weekNow()
+
+    fun termOf(): String {
+        val t = sp.getString("term", "") ?: ""
+        return t.substringAfter('|', t)
+    }
+
+    fun syncedAtOf(): Long = sp.getLong("syncedAt", 0L)
+
     fun realName(): String = sp.getString("realName", "") ?: ""
     fun hasToken(): Boolean = !sp.getString("token", null).isNullOrEmpty()
 

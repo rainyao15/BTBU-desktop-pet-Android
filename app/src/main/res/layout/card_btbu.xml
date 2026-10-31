@@ -95,6 +95,19 @@
     </LinearLayout>
 
     <TextView
+        android:id="@+id/btnBtbuSchedule"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_btn_ghost"
+        android:gravity="center"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:text="看整周课表"
+        android:textColor="@color/text_sub"
+        android:textSize="14sp" />
+
+    <TextView
         android:id="@+id/accStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

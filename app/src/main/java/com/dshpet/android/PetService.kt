@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Typeface
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.drawable.Icon
@@ -55,6 +56,7 @@ class PetService : Service() {
         const val ACTION_STOP = "com.dshpet.android.action.STOP"
         const val ACTION_RELOAD = "com.dshpet.android.action.RELOAD"
         const val ACTION_LINES = "com.dshpet.android.action.LINES"
+        const val ACTION_SYNC = "com.dshpet.android.action.SYNC"
 
         fun start(ctx: Context) {
             val i = Intent(ctx, PetService::class.java).setAction(ACTION_START)
@@ -103,6 +105,14 @@ class PetService : Service() {
     private var lastSpeechCheck = 0L
     private var lastPeriod = ""
     private var lastBtbuCheck = 0L
+
+    // ---- 常驻数据气泡（贴在宠物头顶，显示余额 + 下一节课）----
+    private var dbRoot: View? = null
+    private var dbParams: WindowManager.LayoutParams? = null
+    private var dbPet: Pet? = null
+    private var dbTitle: TextView? = null
+    private var dbBody: TextView? = null
+    private var dbSig = ""
     private var tapCount = 0
     private var tapWindowMs = 0L
 
@@ -162,6 +172,17 @@ class PetService : Service() {
                     teardown()
                     spawnAll(Prefs.sizeDp(this))
                 }
+                ACTION_SYNC -> {
+                    try {
+                        com.dshpet.android.btbu.BtbuSync.refreshAsync(this) { ok ->
+                            updateDataBubble(true)
+                            updateNotification()
+                            if (ok) sayFrom("greet", force = false)
+                        }
+                    } catch (t: Throwable) {
+                        Diag.record(this, "通知栏刷新失败", t)
+                    }
+                }
                 ACTION_LINES -> {
                     // 台词刚被改过：换用新台词，并当场说一句让用户看到效果
                     try {
@@ -209,15 +230,64 @@ class PetService : Service() {
             Intent(this, PetService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val stopIcon = Icon.createWithResource(this, R.drawable.ic_launcher)
+        val sync = PendingIntent.getService(
+            this, 2,
+            Intent(this, PetService::class.java).setAction(ACTION_SYNC),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val icon = Icon.createWithResource(this, R.drawable.ic_launcher)
+
+        // 通知里直接给数据：锁屏 / 下拉栏就能看，不用点开小卡
+        val st = try {
+            com.dshpet.android.btbu.BtbuSync.state(this)
+        } catch (t: Throwable) {
+            null
+        }
+        val clock = java.text.SimpleDateFormat("HH:mm", java.util.Locale.CHINA)
+            .format(java.util.Date())
+        val hasData = st != null && st.hasData
+        val title = if (hasData) {
+            clock + " · 第 " + st.week + " 周 · " + st.balanceLine()
+        } else {
+            getString(R.string.notif_title)
+        }
+        val text = if (hasData) {
+            st.nextLine()
+        } else if (com.dshpet.android.btbu.BtbuSync.configured(this)) {
+            "点这里同步"
+        } else {
+            "点这里填学号，开始同步"
+        }
+        val big = if (hasData) {
+            val net = st.net
+            val flow = if (net != null) "流量 总余 " + net.flowTotal + " · 本月余 " + net.flowMonth else ""
+            st.nextLine() + "\n" + st.balanceLine() + "\n" + flow + "\n" + st.term
+        } else {
+            text
+        }
+
         return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle(getString(R.string.notif_title))
-            .setContentText(getString(R.string.notif_text))
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(big))
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentIntent(open)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(stopIcon, getString(R.string.notif_stop), stop).build())
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .addAction(Notification.Action.Builder(icon, "刷新", sync).build())
+            .addAction(Notification.Action.Builder(icon, getString(R.string.notif_stop), stop).build())
             .build()
+    }
+
+    /** 数据变了 / 到点了：把通知栏重画一遍（同一个 id，不会刷出多条） */
+    private fun updateNotification() {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIF_ID, buildNotification())
+        } catch (t: Throwable) {
+            Diag.record(this, "更新通知失败", t)
+        }
     }
 
     private fun goForeground() {
@@ -343,6 +413,15 @@ class PetService : Service() {
             Diag.record(this, "创建数据小卡失败", t)
         }
 
+        // 常驻数据气泡（余额 + 下一节课）
+        try {
+            dismissDataBubble()
+            ensureDataBubble()
+            updateDataBubble(true)
+        } catch (t: Throwable) {
+            Diag.record(this, "数据气泡创建失败", t)
+        }
+
         // 打个招呼
         handler.postDelayed({ sayFrom("greet", force = true) }, 1600L)
     }
@@ -351,6 +430,7 @@ class PetService : Service() {
         handler.removeCallbacks(tickRunnable)
         dismissMenu()
         dismissBubble()
+        dismissDataBubble()
         try {
             hud?.release()
         } catch (t: Throwable) {
@@ -369,6 +449,145 @@ class PetService : Service() {
             }
         }
         held.clear()
+    }
+
+    // ------------------------------------------------------------ 常驻数据气泡
+
+    private fun dpPx(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    /**
+     * 常驻气泡：白底 + 蓝边 + 小三角，贴在宠物头顶，显示「余额」+「下一节课」。
+     * 点它 → 打开整周课表。和台词气泡是两个独立窗口，互不打断。
+     */
+    private fun ensureDataBubble() {
+        val w = wm ?: return
+        if (dbRoot != null) return
+        val pet = held.firstOrNull()?.pet ?: return
+        val d = resources.displayMetrics.density
+
+        val t1 = TextView(this).apply {
+            setTextColor(0xFF16223B.toInt())
+            textSize = 13.5f
+            typeface = Typeface.DEFAULT_BOLD
+            includeFontPadding = false
+        }
+        val t2 = TextView(this).apply {
+            setTextColor(0xFF3A4A6B.toInt())
+            textSize = 11f
+            includeFontPadding = false
+            setPadding(0, (2 * d).toInt(), 0, 0)
+        }
+        dbTitle = t1
+        dbBody = t2
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((12 * d).toInt(), (8 * d).toInt(), (12 * d).toInt(), (8 * d).toInt())
+            background = GradientDrawable().apply {
+                cornerRadius = 14f * d
+                setColor(0xF2FFFFFF.toInt())
+                setStroke((1.5f * d).toInt(), 0x664E6BFF.toInt())
+            }
+            addView(t1)
+            addView(t2)
+            setOnClickListener {
+                try {
+                    startActivity(
+                        Intent(this@PetService, com.dshpet.android.btbu.ScheduleActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                } catch (t: Throwable) {
+                    Diag.record(this@PetService, "打开课表失败", t)
+                }
+            }
+        }
+
+        val maxW = (resources.displayMetrics.widthPixels * 0.7f).toInt()
+        box.measure(
+            View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val bw = box.measuredWidth.coerceAtLeast(dpPx(60))
+        val bh = box.measuredHeight.coerceAtLeast(dpPx(30))
+        val lp = WindowManager.LayoutParams(
+            bw, bh,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT,
+        )
+        lp.gravity = Gravity.TOP or Gravity.START
+        placeBubble(lp, bw, bh, pet)
+        try {
+            w.addView(box, lp)
+            dbRoot = box
+            dbParams = lp
+            dbPet = pet
+        } catch (t: Throwable) {
+            Diag.record(this, "数据气泡创建失败", t)
+            dbRoot = null
+            dbParams = null
+        }
+    }
+
+    private fun updateDataBubble(force: Boolean = false) {
+        val st = try {
+            com.dshpet.android.btbu.BtbuSync.state(this)
+        } catch (t: Throwable) {
+            null
+        }
+        val hasData = st != null && st.hasData
+        val sig = if (hasData) st.week.toString() + "|" + st.balanceLine() + "|" + st.nextLine() else "empty"
+        if (!force && sig == dbSig) return
+        dbSig = sig
+        dbTitle?.text = if (hasData) st.balanceLine() else "点这里填学号"
+        dbBody?.text = if (hasData) st.nextLine() else "北工商桌宠 · 还没同步"
+
+        val box = dbRoot ?: return
+        val pet = dbPet ?: return
+        val lp = dbParams ?: return
+        val maxW = (resources.displayMetrics.widthPixels * 0.7f).toInt()
+        box.measure(
+            View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val bw = box.measuredWidth.coerceAtLeast(dpPx(60))
+        val bh = box.measuredHeight.coerceAtLeast(dpPx(30))
+        lp.width = bw
+        lp.height = bh
+        placeBubble(lp, bw, bh, pet)
+        try {
+            wm?.updateViewLayout(box, lp)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun followDataBubble() {
+        val box = dbRoot ?: return
+        val lp = dbParams ?: return
+        val pet = dbPet ?: return
+        val oldX = lp.x
+        val oldY = lp.y
+        placeBubble(lp, box.measuredWidth, box.measuredHeight, pet)
+        if (lp.x == oldX && lp.y == oldY) return
+        try {
+            wm?.updateViewLayout(box, lp)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun dismissDataBubble() {
+        val box = dbRoot ?: return
+        try {
+            wm?.removeView(box)
+        } catch (_: Throwable) {
+        }
+        dbRoot = null
+        dbParams = null
+        dbPet = null
+        dbTitle = null
+        dbBody = null
+        dbSig = ""
     }
 
     // ------------------------------------------------------------ 台词气泡
@@ -395,6 +614,11 @@ class PetService : Service() {
     private fun say(pet: Pet, text: String) {
         val w = wm ?: return
         dismissBubble()
+        // 台词气泡和数据气泡锚点相同，会完全叠住：说台词时先把数据气泡藏起来
+        try {
+            dbRoot?.visibility = View.GONE
+        } catch (_: Throwable) {
+        }
         val d = resources.displayMetrics.density
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -499,6 +723,10 @@ class PetService : Service() {
     }
 
     private fun dismissBubble() {
+        try {
+            dbRoot?.visibility = View.VISIBLE
+        } catch (_: Throwable) {
+        }
         val v = bubbleRoot ?: return
         bubbleRoot = null
         bubbleParams = null
@@ -775,6 +1003,11 @@ class PetService : Service() {
             } catch (t: Throwable) {
                 Diag.record(this@PetService, "followBubble 异常", t)
             }
+            try {
+                followDataBubble()
+            } catch (t: Throwable) {
+                Diag.record(this@PetService, "followDataBubble 异常", t)
+            }
             val n = SystemClock.uptimeMillis()
             if (n - lastSpeechCheck > 1000L) {
                 lastSpeechCheck = n
@@ -789,6 +1022,8 @@ class PetService : Service() {
                 lastBtbuCheck = n
                 try {
                     tickBtbu()
+                    updateDataBubble()
+                    updateNotification()
                 } catch (t: Throwable) {
                     Diag.record(this@PetService, "tickBtbu 异常", t)
                 }
