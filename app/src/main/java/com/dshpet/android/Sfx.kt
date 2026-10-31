@@ -72,9 +72,12 @@ object Sfx {
             // 音源来自 dsh-whale-widget（MIT）的「音效1」预设：
             // res/raw/tap_press.mp3 = assets/Ya1.mp3（按下），res/raw/tap_release.mp3 = assets/Ya2.mp3（抬手）。
             // 仍然走 getIdentifier 而不是 R.raw.xxx：素材缺失时静默降级，不会让编译失败。
-            pressId = p.load(ctx, rawId(ctx, "tap_press"), 1)
-            releaseId = p.load(ctx, rawId(ctx, "tap_release"), 1)
-            pressDurMs = rawDurationMs(ctx, pressId)
+            val pressRes = rawId(ctx, "tap_press")
+            val releaseRes = rawId(ctx, "tap_release")
+            pressId = p.load(ctx, pressRes, 1)
+            releaseId = p.load(ctx, releaseRes, 1)
+            // 注意：上面 load() 返回的是 SoundPool 的 soundId，读时长必须用**资源 id**
+            pressDurMs = rawDurationMs(ctx, pressRes)
             pool = p
             Diag.record(ctx, "音效就绪: press=$pressId(${pressDurMs}ms) release=$releaseId")
         } catch (t: Throwable) {
