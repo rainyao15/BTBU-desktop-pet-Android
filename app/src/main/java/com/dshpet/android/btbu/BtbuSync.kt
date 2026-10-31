@@ -60,6 +60,7 @@ object BtbuSync {
                 false
             }
             syncing = false
+            if (ok) BtbuWidgetProvider.refresh(app)     // 数据变了，顺手刷桌面挂件
             main.post { onDone?.invoke(ok) }
         }
     }

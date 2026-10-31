@@ -127,6 +127,28 @@ bash tools/fetch-and-transcode.sh          # Git Bash / MSYS
 
 ---
 
+## 本地类型检查（不用 Android Studio，一条命令）
+
+上一轮踩过的坑（Kotlin 块注释嵌套、字符串字面量裸换行）都是肉眼看不出来的，所以有了这个：
+
+```bash
+# 一次性准备（约 340 MB，都是官方包）
+#   JDK 17        https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse
+#   kotlinc 2.0.20 https://github.com/JetBrains/kotlin/releases/download/v2.0.20/kotlin-compiler-2.0.20.zip
+#   android.jar    https://dl.google.com/android/repository/platform-34-ext7_r03.zip  （zip 里取 android-34/android.jar）
+
+export JAVA_HOME='D:\jdk-17'
+export KOTLINC=/d/kotlin/kotlinc/bin/kotlinc.bat
+export ANDROID_JAR='D:ndroid-sdk\platformsndroid-34ndroid.jar'
+
+./tools/typecheck.sh
+# ==> 类型检查通过（0 error）
+```
+
+原理：`tools/gen_r_stub.py` 扫 `res/` 生成 `R.kt` 桩（R 类本来是 aapt 生成的，纯 kotlinc 没有），
+然后 kotlinc 拿 `android.jar` 当 classpath 把 20 个源文件整体编译。
+改完代码先跑它，再 push，能省掉一轮 20 分钟的 CI 往返。
+
 ## 自检
 
 没有 Android SDK 也能先跑一遍资源体检（防止 R.id 写错、漏建 layout）：

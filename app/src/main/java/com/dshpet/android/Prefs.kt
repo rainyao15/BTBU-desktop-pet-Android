@@ -17,6 +17,8 @@ object Prefs {
     private const val KEY_ACC_PASS = "acc_pass"
     private const val KEY_UUID = "dev_uuid"
     private const val KEY_HUD = "hud_on"
+    private const val KEY_HUD_X = "hud_x"
+    private const val KEY_HUD_Y = "hud_y"
 
     const val DEFAULT_SIZE_DP = 150
     const val MIN_SIZE_DP = 80
@@ -109,5 +111,21 @@ object Prefs {
 
     fun setHudOn(ctx: Context, v: Boolean) {
         sp(ctx).edit().putBoolean(KEY_HUD, v).apply()
+    }
+
+    /** 小卡位置（拖动后记住；-1 表示还没拖过，用默认值） */
+    fun hudX(ctx: Context, def: Int): Int = sp(ctx).getInt(KEY_HUD_X, def)
+
+    fun hudY(ctx: Context, def: Int): Int = sp(ctx).getInt(KEY_HUD_Y, def)
+
+    fun setHudPos(ctx: Context, x: Int, y: Int) {
+        sp(ctx).edit().putInt(KEY_HUD_X, x).putInt(KEY_HUD_Y, y).apply()
+    }
+
+    /** 提醒冷却：key → 上次说这句话的时间戳 */
+    fun alertAt(ctx: Context, key: String): Long = sp(ctx).getLong("alert_" + key, 0L)
+
+    fun setAlertAt(ctx: Context, key: String, at: Long) {
+        sp(ctx).edit().putLong("alert_" + key, at).apply()
     }
 }

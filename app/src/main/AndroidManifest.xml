@@ -49,6 +49,19 @@
                 android:value="floating_desktop_pet" />
         </service>
 
+        <!-- 桌面挂件：真正嵌在桌面网格里 -->
+        <receiver
+            android:name=".btbu.BtbuWidgetProvider"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.dshpet.android.btbu.WIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/btbu_widget_info" />
+        </receiver>
+
         <receiver
             android:name=".BootReceiver"
             android:exported="true">

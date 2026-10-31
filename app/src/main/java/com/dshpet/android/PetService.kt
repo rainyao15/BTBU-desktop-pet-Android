@@ -30,6 +30,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import java.util.Calendar
 import kotlin.random.Random
+import com.dshpet.android.btbu.BtbuAlerts
 import com.dshpet.android.btbu.BtbuHud
 
 /**
@@ -101,6 +102,7 @@ class PetService : Service() {
     private var lastInteractMs = 0L
     private var lastSpeechCheck = 0L
     private var lastPeriod = ""
+    private var lastBtbuCheck = 0L
     private var tapCount = 0
     private var tapWindowMs = 0L
 
@@ -566,6 +568,18 @@ class PetService : Service() {
     }
 
     /** 每秒跑一次：时段问候 + 闲置吐槽 */
+    /** 让宠物对北工商数据做反应：一次只挑一条，且每条都有冷却，避免刷屏 */
+    private fun tickBtbu() {
+        val pet = held.firstOrNull()?.pet ?: return
+        val alert = BtbuAlerts.pick(this) ?: return
+        try {
+            say(pet, alert.text)
+            BtbuAlerts.mark(this, alert.key)
+        } catch (t: Throwable) {
+            Diag.record(this, "数据提醒失败", t)
+        }
+    }
+
     private fun tickSpeech(now: Long) {
         if (held.isEmpty()) return
 
@@ -768,6 +782,15 @@ class PetService : Service() {
                     tickSpeech(n)
                 } catch (t: Throwable) {
                     Diag.record(this@PetService, "tickSpeech 异常", t)
+                }
+            }
+            // 每 60 秒看一次"有没有值得对真实数据反应的事"（余额、限速、快上课）
+            if (n - lastBtbuCheck > 60_000L) {
+                lastBtbuCheck = n
+                try {
+                    tickBtbu()
+                } catch (t: Throwable) {
+                    Diag.record(this@PetService, "tickBtbu 异常", t)
                 }
             }
             handler.postDelayed(this, if (active) 16L else 66L)
