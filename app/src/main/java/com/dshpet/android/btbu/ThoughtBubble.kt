@@ -43,11 +43,21 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
         private const val CHIP_U = 46f / VW
         private const val TIMER_U = 56f / VW
 
-        /** 文字块中心点（上游 left:44.25% / top:36%）与可用宽度 */
+        /** 文字块中心点（上游 left:44.25% / top:36%） */
         private const val TEXT_CX = 0.4425f
         private const val TEXT_CY = 0.36f
-        private const val TEXT_W = 0.80f
+
+        /**
+         * 可用文字框占画布的比例。
+         * 坑：SVG 画布 1026×700，而椭圆本体只占 x 81..827 / y 15..479 —— 画布左右是空边。
+         * 早先按 0.80 取宽，真机上字直接把描边顶穿了。按椭圆内沿并扣掉描边重算：
+         * 宽 (827-81-18*2)/1026 ≈ 0.69、高 (479-15-18*2)/700 ≈ 0.61，各留余量取 0.68 / 0.50。
+         */
+        private const val TEXT_W = 0.68f
         private const val TEXT_H = 0.50f
+
+        /** 单行最多缩到原字号的 62%（再小就宁可挤一点，也不能看不清） */
+        private const val MIN_LINE_SCALE = 0.62f
     }
 
     /**
@@ -125,23 +135,28 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
     }
 
     /**
-     * 把 u 比例换算成像素字号。s 是自动缩字系数。
+     * 把 u 比例换算成像素字号。三个 s 分别是标题/大数字/副行的**各自**缩放系数。
+     * 为什么要分开：我们这边的三行长短差得多（"北工商 · 第 8 周" / "网 15.00" / "今天 14:00 毛概 @工3-106"），
+     * 统一缩放会让最短那行被最长那行拖到看不清。上游是固定短文本，没这个问题。
      * 气泡没量到宽度之前 unit 是 0，先给个安全的占位，onMeasure 会重算。
      */
-    private fun applySizes(s: Float) {
-        val k = unit * s
-        label?.setTextSize(TypedValue.COMPLEX_UNIT_PX, k * VW * LABEL_U)
-        amount?.setTextSize(TypedValue.COMPLEX_UNIT_PX, k * VW * AMOUNT_U)
-        hint?.setTextSize(TypedValue.COMPLEX_UNIT_PX, k * VW * HINT_U)
+    private fun applySizes(sLabel: Float, sAmount: Float, sHint: Float) {
+        val k = unit
+        label?.setTextSize(TypedValue.COMPLEX_UNIT_PX, k * VW * LABEL_U * sLabel)
+        amount?.setTextSize(TypedValue.COMPLEX_UNIT_PX, k * VW * AMOUNT_U * sAmount)
+        hint?.setTextSize(TypedValue.COMPLEX_UNIT_PX, k * VW * HINT_U * sHint)
 
-        val timerPx = k * VW * TIMER_U
+        val timerPx = k * VW * TIMER_U * sHint
         timer?.setTextSize(TypedValue.COMPLEX_UNIT_PX, timerPx)
-        val chipPx = k * VW * CHIP_U
+        val chipPx = k * VW * CHIP_U * sHint
         chip?.setTextSize(TypedValue.COMPLEX_UNIT_PX, chipPx)
         val padH = (chipPx * 0.55f).toInt()
         val padV = (chipPx * 0.18f).toInt()
         chip?.setPadding(padH, padV, padH, padV)
     }
+
+    /** 三条一起缩（bind 时还不知道尺寸，先用 1 倍占位） */
+    private fun applySizes(s: Float) = applySizes(s, s, s)
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val density = resources.displayMetrics.density
@@ -153,24 +168,46 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
         val h = (w * VH / VW).toInt()
 
         val child = getChildAt(0)
-        if (child != null) {
-            val maxW = (w * TEXT_W).toInt()
-            val maxH = (h * TEXT_H).toInt()
-            val unspecified = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
-            var s = 1f
-            for (i in 0 until 4) {
-                applySizes(s)
-                child.measure(unspecified, unspecified)
-                val cw = child.measuredWidth
-                val chh = child.measuredHeight
-                var f = 1f
-                if (cw > maxW && cw > 0) f = minOf(f, maxW.toFloat() / cw)
-                if (chh > maxH && chh > 0) f = minOf(f, maxH.toFloat() / chh)
-                if (f >= 0.995f) break
-                s *= f * 0.98f
-            }
-            textScale = s
+        if (child == null) {
+            setMeasuredDimension(w, h)
+            return
         }
+
+        val maxW = (w * TEXT_W).toInt()
+        val maxH = (h * TEXT_H).toInt()
+        val uns = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+        val atMostW = MeasureSpec.makeMeasureSpec(maxW, MeasureSpec.AT_MOST)
+
+        // ① 每条按自己的自然宽度决定缩多少（只在超框时才缩）
+        applySizes(1f, 1f, 1f)
+        var sLabel = 1f
+        var sAmount = 1f
+        label?.let {
+            it.measure(uns, uns)
+            if (it.measuredWidth > maxW) {
+                sLabel = (maxW.toFloat() / it.measuredWidth).coerceAtLeast(MIN_LINE_SCALE)
+            }
+        }
+        amount?.let {
+            it.measure(uns, uns)
+            if (it.measuredWidth > maxW) {
+                sAmount = (maxW.toFloat() / it.measuredWidth).coerceAtLeast(MIN_LINE_SCALE)
+            }
+        }
+        applySizes(sLabel, sAmount, 1f)
+
+        // ② 整块跑出圈外就再整体压一点（副行可以折行，所以还缩不动时优先压高度）
+        var hScale = 1f
+        for (i in 0 until 3) {
+            child.measure(atMostW, uns)
+            val chh = child.measuredHeight
+            if (chh <= maxH || chh <= 0) break
+            hScale *= (maxH.toFloat() / chh) * 0.98f
+            applySizes(sLabel * hScale, sAmount * hScale, hScale)
+        }
+        child.measure(atMostW, uns)
+        textScale = minOf(sLabel, sAmount) * hScale
+
         setMeasuredDimension(w, h)
     }
 

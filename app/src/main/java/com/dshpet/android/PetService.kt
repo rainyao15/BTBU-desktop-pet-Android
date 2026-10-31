@@ -487,7 +487,7 @@ class PetService : Service() {
 
         // 字号/颜色都由 ThoughtBubble.bind() 统一管，这里只负责搭结构
         val head = TextView(this)
-        val main = TextView(this)
+        val main = TextView(this).apply { maxLines = 2 }
         val sub = TextView(this).apply { maxLines = 2 }
         val chip = TextView(this).apply { text = "课" }
         val timer = Chronometer(this).apply { format = "距上课  %s" }
@@ -574,11 +574,14 @@ class PetService : Service() {
         }
     }
 
-    /** 气泡宽度跟着宠物大小走（上游是宽 1026 : 高 700 的固定比例，所以只定宽），再夹在屏幕内 */
+    /**
+     * 气泡宽度跟着宠物大小走（上游是宽 1026 : 高 700 的固定比例，所以只定宽），再夹在屏幕内。
+     * 1.75 这个系数是照真机截图校的：0.95 时气泡只有 189px，"网 15.00  卡 25.80" 会被压成 9px 的字。
+     */
     private fun bubbleWidthPx(pet: Pet): Int {
         val screenW = resources.displayMetrics.widthPixels
-        val want = (pet.sizePx * 0.95f).toInt()
-        return minOf(want, (screenW * 0.72f).toInt()).coerceAtLeast(dpPx(150))
+        val want = (pet.sizePx * 1.75f).toInt()
+        return minOf(want, (screenW * 0.62f).toInt()).coerceAtLeast(dpPx(220))
     }
 
     private fun updateDataBubble(force: Boolean = false) {
@@ -618,8 +621,9 @@ class PetService : Service() {
         }
         if (!force && sig == dbSig) return
         dbSig = sig
-        dbTitle?.text = if (hasData) st.balanceLine() else "点这里填学号"
-        dbBody?.text = if (hasData) st.nextLine() else "还没同步 · 点我填学号"
+        // 大数字拆成两行（"网 15.00" / "卡 25.80"）：一行 15 个字塞进椭圆必然被压到 9px
+        dbTitle?.text = if (hasData) st.balanceLine().replace("  ", "\n") else "未登录"
+        dbBody?.text = if (hasData) st.nextLine() else "点气泡填学号"
 
         val box = dbRoot ?: return
         val pet = dbPet ?: return
