@@ -10,7 +10,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -27,13 +27,42 @@ jobs:
           node-version: '22'
 
       - name: 安装 ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg unzip
 
-      - name: 安装 Android SDK
-        uses: android-actions/setup-android@v3
+      # 不用 android-actions/setup-android@v3 —— 那个 action 经常在"下载 cmdline-tools"上翻车。
+      # runner 自带 Android SDK，先用它；真没有才手动下 cmdline-tools 兜底。
+      - name: 准备 Android SDK（优先用 runner 自带的）
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then SDK=/usr/local/lib/android/sdk; fi
+          if [ ! -d "$SDK" ]; then SDK="$HOME/android-sdk"; fi
+          echo "SDK=$SDK"
+          mkdir -p "$SDK"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK"     >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools"   >> "$GITHUB_PATH"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "--- 现有内容 ---"
+          ls "$SDK" || true
 
-      - name: 安装 SDK 组件
-        run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+      - name: 安装 SDK 组件（缺什么装什么）
+        run: |
+          set -euo pipefail
+          SDKM="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKM" ]; then
+            echo "没有 sdkmanager，手动下 cmdline-tools"
+            curl -fsSL -o /tmp/clt.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q /tmp/clt.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
+            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            SDKM="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+            chmod +x "$SDKM"
+          fi
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          "$SDKM" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          echo "--- 已装 ---"
+          "$SDKM" --list_installed
 
       - name: 版本自检（出问题先看这一步）
         run: |
@@ -48,7 +77,14 @@ jobs:
         run: chmod +x gradlew tools/fetch-and-transcode.sh tools/*.mjs
 
       - name: 还原素材（从上游 dsh-pet 转码，约 10~20 分钟）
+        env:
+          # 钉死上游版本：0.3.8 实测含 106 段 webm + config.jsonc，避免上游改版把 CI 弄红
+          PKG: dsh-pet@0.3.8
+          WIDTH: '480'
+          FPS: '15'
+          QUALITY: '50'
         run: |
+          set -euo pipefail
           sudo ln -sf "$(which ffmpeg)" /usr/local/bin/ffmpeg
           ./tools/fetch-and-transcode.sh
           echo "--- 转码结果 ---"

@@ -3,6 +3,7 @@
 #
 #   ./tools/fetch-and-transcode.sh
 #   WIDTH=640 QUALITY=60 FPS=24 ./tools/fetch-and-transcode.sh
+#   PKG=dsh-pet@0.3.8 ./tools/fetch-and-transcode.sh   # 钉版本，避免上游改版把 CI 弄红
 #
 # 需要：node/npm、ffmpeg（带 libvpx-vp9 解码 + libwebp_anim 编码）
 set -euo pipefail
@@ -13,8 +14,9 @@ cd "$ROOT"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-echo "==> npm pack dsh-pet"
-npm pack dsh-pet --pack-destination "$WORK" >/dev/null
+PKG="${PKG:-dsh-pet}"
+echo "==> npm pack $PKG"
+npm pack "$PKG" --pack-destination "$WORK" --no-audit --no-fund >/dev/null
 TGZ="$(ls "$WORK"/dsh-pet-*.tgz | head -n1)"
 tar -xzf "$TGZ" -C "$WORK"
 
