@@ -79,13 +79,12 @@ class Pet(
 
     private var facing = 1                 // 1 = 朝右，-1 = 朝左（只决定「往哪走」，不再决定画法）
     /**
-     * 朝向规则（站定时）：
-     * false = 面朝屏幕**中间**（在右边就朝左、在左边就朝右，等于"看着你"）—— 默认；
-     * true  = 面朝屏幕外侧（在左半屏就朝左、在右半屏就朝右）。
+     * 朝向规则（只按位置算，与走路/站定无关，跟上游 applyFlip() 一致）：
+     * true  = 面朝屏幕外侧：在左半屏朝左、在右半屏朝右 —— 默认，也是上游的行为；
+     * false = 面朝屏幕中间（"看着你"）。
      * 动作菜单里的「翻转朝向」会切换这个值。
-     * 走路/拖拽时仍然只看 [facing]，否则会像倒着走。
      */
-    private var faceOutward = false
+    private var faceOutward = true
     private var lastWantLeft: Boolean? = null   // 只为 Diag 打点：朝向变化时记一条
     private var forcedNoMirror = false      // 文字类动作不镜像
 
@@ -716,14 +715,16 @@ class Pet(
             val d = current ?: return
             val w = width.toFloat()
             val h = height.toFloat()
-            // 朝向：走路/拖拽时看着自己前进的方向（不然像在倒着走），
-            // 站定时才按「在哪半边就朝哪边」来定。底图本身朝右，所以「朝左」= 镜像。
-            val onLeftHalf = x + sizePx / 2f < context.resources.displayMetrics.widthPixels / 2f
-            val wantLeft = when {
-                mode == Mode.MOVE -> facing < 0
-                faceOutward -> onLeftHalf
-                else -> !onLeftHalf
-            }
+            // 朝向：**只看位置**，不看走没走路。
+            // 这条规则是照抄上游 whale-widget.js 的 applyFlip()：
+            //   if (state.h === 'left') state.flip = true
+            //   else if (state.h === 'right') state.flip = false
+            //   else state.flip = artCenter.cx < snapBounds(vp).F   // 中线
+            // 上游没有任何"按走路方向决定"的分支 —— 之前加的那个分支会让宠物
+            // 一直朝右走到贴墙后仍然朝右（看起来就像没反应）。底图本身朝右。
+            val midX = context.resources.displayMetrics.widthPixels / 2f
+            val onLeftHalf = x + sizePx / 2f < midX
+            val wantLeft = if (faceOutward) onLeftHalf else !onLeftHalf
             val mirror = !forcedNoMirror && wantLeft
             if (lastWantLeft != wantLeft) {
                 lastWantLeft = wantLeft
