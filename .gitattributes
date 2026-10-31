@@ -1,0 +1,9 @@
+# 统一换行：仓库里一律 LF，Windows 批处理保留 CRLF
+# （gradlew / *.sh 如果是 CRLF，CI 上会直接 "/bin/bash^M: bad interpreter"）
+* text=auto eol=lf
+*.bat text eol=crlf
+*.sh text eol=lf
+gradlew text eol=lf
+*.png binary
+*.jar binary
+*.webp binary
