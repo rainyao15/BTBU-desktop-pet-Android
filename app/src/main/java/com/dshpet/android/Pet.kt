@@ -52,6 +52,15 @@ class Pet(
         private val io = Executors.newSingleThreadExecutor()
         /** 资源前缀：slug 以它开头时走 res 而不是 assets */
         const val RES_PREFIX = "res:"
+
+        // ---- 按压压扁：数值逐个照抄上游 DSH 鲸鱼挂件 assets/whale-widget.js ----
+        //   var SQUISH = 'scaleY(0.88) scaleX(1.05)'
+        //   .dshwv-body{transform-origin:50% 100%; transition:transform .22s cubic-bezier(.34,1.56,.64,1)}
+        //   var PRESS_VISUAL_TAP_MS = 32   // 极短点按要补一次强制 reflow，否则看不见压扁
+        private const val SQUISH_Y = 0.88f
+        private const val SQUISH_X = 1.05f
+        private const val PRESS_TRANSITION_MS = 220L
+        private const val PRESS_TAP_GUARD_MS = 32L
     }
 
     private val density = context.resources.displayMetrics.density
@@ -116,6 +125,39 @@ class Pet(
     private var squashAtMs = 0L
     private var squashAmount = Physics.SQ_SQUASH
     private var squashActive = false
+
+    // ---- 按压压扁（照抄上游 DSH 鲸鱼挂件的点击效果）----
+    // 上游 assets/whale-widget.js：
+    //   var SQUISH = 'scaleY(0.88) scaleX(1.05)'
+    //   pressDown(): body.style.transform = SQUISH
+    //   pressUp():   body.style.transform = 'scaleY(1) scaleX(1)'
+    //   极短点按（< PRESS_VISUAL_TAP_MS=32ms）时补一次 transition:none + 强制 reflow，
+    //   让"按下去的那一下"至少能看见，然后立刻回弹
+    //   样式：.dshwv-body{transform-origin:50% 100%; transition:transform .22s cubic-bezier(.34,1.56,.64,1)}
+    // 我们这边 onDraw 本来就用「脚底中点」当锚点做 canvas.scale，跟 transform-origin:50% 100% 等价，
+    // 所以只要把 (sx, sy) 喂进去就一模一样。
+    /** 上游那条 cubic-bezier(.34,1.56,.64,1)：会冲过头再回来，就是"弹"的来源 */
+    private val pressEase = android.view.animation.PathInterpolator(0.34f, 1.56f, 0.64f, 1f)
+
+    /** 0 = 原样，1 = 压到最瘪 */
+    private var pressFromP = 0f
+    private var pressToP = 0f
+    private var pressAnimStartMs = 0L
+    private var pressDownAtMs = 0L
+
+    /** 当前压扁进度（含回弹过冲，可能略微 <0 或 >1，和浏览器里一样） */
+    private fun pressProgress(): Float {
+        val t = ((SystemClock.uptimeMillis() - pressAnimStartMs).toFloat() / PRESS_TRANSITION_MS).coerceIn(0f, 1f)
+        val e = pressEase.getInterpolation(t)
+        return pressFromP + (pressToP - pressFromP) * e
+    }
+
+    private fun startPress(target: Float) {
+        pressFromP = pressProgress()
+        pressToP = target
+        pressAnimStartMs = SystemClock.uptimeMillis()
+        canvasView.invalidate()
+    }
 
     private val canvasView = PetCanvas(context)
 
@@ -506,12 +548,9 @@ class Pet(
     private fun onTap() {
         Log.i(TAG, "-> onTap")
         wake()
-        squash(Physics.SQ_SQUASH)
+        // 点击效果 = 上游那套「按一下变瘪、松手弹回来」，已经在 ACTION_DOWN/UP 里做了，
+        // 这里不再播「摸摸头」动画（clicks 配置项保留，只是默认不再被点到）。
         onTap?.invoke()
-        if (cfg.clicks.isEmpty()) { playIdle(); return }
-        mode = Mode.IDLE
-        forcedNoMirror = false
-        play(cfg.clicks.random()) { scheduleNext() }
     }
 
     // ---------------------------------------------------------------- 每帧
@@ -602,6 +641,12 @@ class Pet(
             active = true
         }
 
+        // 按压压扁 / 回弹还在 220ms 过渡里 → 继续驱动重绘（否则松手后停在半瘪）
+        if (SystemClock.uptimeMillis() - pressAnimStartMs < PRESS_TRANSITION_MS) {
+            canvasView.invalidate()
+            active = true
+        }
+
         // 动画链由 start() 启动、由每段动画的 onEnd 续接；
         // 这里绝不能兜底调用 scheduleNext()——解码是异步的，每帧重触发会不停取消上一段解码。
         return active
@@ -668,9 +713,14 @@ class Pet(
                     .coerceIn(0.0, 1.0)
                 sy = Physics.squashScale(u, squashAmount)
             }
+            // 按压压扁：上游 SQUISH = scaleY(0.88) scaleX(1.05)；松手回 scale(1,1)。
+            // pp 的过冲（<0 / >1）就是回弹时那一下"鼓回来"。
+            val pp = pressProgress()
+            val sx = 1f + (SQUISH_X - 1f) * pp
+            sy *= (1f + (SQUISH_Y - 1f) * pp)
             canvas.save()
             canvas.translate(w / 2f, h)          // 以脚底中点为锚点
-            canvas.scale(if (mirror) -1f else 1f, sy.toFloat())
+            canvas.scale((if (mirror) -1f else 1f) * sx, sy.toFloat())
             canvas.translate(-w / 2f, -h)
             d.setBounds(0, 0, width, height)
             d.draw(canvas)
@@ -702,6 +752,9 @@ class Pet(
                     dragging = false
                     pressed = true
                     Sfx.press()
+                    // 上游 pressDown()
+                    pressDownAtMs = SystemClock.uptimeMillis()
+                    startPress(1f)
                     longPressFired = false
                     canvasView.removeCallbacks(longPressRunnable)
                     canvasView.postDelayed(longPressRunnable, 450L)
@@ -740,6 +793,13 @@ class Pet(
                     Log.i(TAG, "-> up drag=$dragging long=$longPressFired")
                     pressed = false
                     canvasView.removeCallbacks(longPressRunnable)
+                    // 上游 pressUp()：极短点按先"补提交"一次压扁，再回弹，否则 30ms 的点击看不见
+                    if (SystemClock.uptimeMillis() - pressDownAtMs < PRESS_TAP_GUARD_MS) {
+                        pressFromP = 1f
+                        pressToP = 1f
+                        pressAnimStartMs = SystemClock.uptimeMillis() - PRESS_TRANSITION_MS
+                    }
+                    startPress(0f)
                     val now = nowMs()
                     if (longPressFired) {
                         // 长按已经弹出动作菜单，抬手不再触发点击回应
@@ -777,6 +837,7 @@ class Pet(
                     canvasView.removeCallbacks(longPressRunnable)
                     dragging = false
                     mode = Mode.IDLE
+                    startPress(0f)
                     return true
                 }
             }
