@@ -188,16 +188,21 @@ tools/
 - **动画素材**：来自 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)，
   其声明为「允许开源使用，**禁止商用**」——因此本仓库不含素材原件，Release 附件同样受此约束。
   详见 [NOTICE.md](NOTICE.md)。
-- **点击音效与鲸鱼娘立绘**：取自社区插件 `dsh-whale-widget`，版权归原作者；
-  本仓库**不包含**这些二进制（`res/raw/*.mp3`、`res/drawable/whale_*.png` 已在 `.gitignore` 中）。
-  想自己构建带音效的版本，把它们放到：
+- **点击音效**：取自社区插件 [`dsh-whale-widget`](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)
+  （**MIT**，Copyright (c) 2025 MeteorNOX）的「音效1」预设，已随仓库分发：
 
   ```
-  app/src/main/res/raw/tap_press.mp3      # 按下音
-  app/src/main/res/raw/tap_release.mp3    # 抬起音
-  app/src/main/res/drawable/whale_cutout.png      # 界面顶部头像
-  app/src/main/res/drawable-nodpi/whale_selfie.png # 背景立绘（可选）
+  app/src/main/res/raw/tap_press.mp3      # 按下音 = assets/Ya1.mp3
+  app/src/main/res/raw/tap_release.mp3    # 抬起音 = assets/Ya2.mp3
   ```
 
-  不带这些文件也能构建（音效静音、头像位置留空）。
+  同一个 MIT 许可是本仓库气泡外形（`res/drawable/btbu_bubble.xml`，逐字符照抄上游 SVG 的 pathData）的依据。
+- **鲸鱼娘立绘**：同样取自该插件，按作者意愿**不随仓库分发**，需要的话自己放：
+
+  ```
+  app/src/main/res/drawable/whale_cutout.png       # 界面顶部头像（已放 1x1 占位图）
+  app/src/main/res/drawable-nodpi/whale_selfie.png # 背景立绘（已放 1x1 占位图）
+  ```
+
+  不带这些文件也能构建（头像位置留空）。
 - 本项目是社区移植，与 DeepSeek 官方无关。

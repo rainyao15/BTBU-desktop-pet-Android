@@ -21,11 +21,14 @@ Thumbs.db
 # 调试残留
 *.log
 
-# 第三方素材：点击音效 + 鲸鱼娘立绘（来自 dsh-whale-widget，版权归原作者，不随仓库分发）
-# 想构建带音效的版本，按 README「许可与署名」一节自行放入
-app/src/main/res/raw/*.mp3
+# 第三方素材：鲸鱼娘立绘（来自 dsh-whale-widget；该仓库为 MIT，这里仍按作者意愿不随仓库分发）
 app/src/main/res/drawable/whale_cutout.png
 app/src/main/res/drawable-nodpi/whale_selfie.png
+
+# 点击音效随仓库分发：上游 dsh-whale-widget 为 MIT（Copyright (c) 2025 MeteorNOX），
+# Ya1/Ya2 两个 mp3 已按 MIT 保留署名，见 README「许可与署名」
+!app/src/main/res/raw/tap_press.mp3
+!app/src/main/res/raw/tap_release.mp3
 
 # 但为了"干净 clone 就能编译"，我们放了两张 1x1 透明占位图（自己的，不是原作者素材）
 !app/src/main/res/drawable/whale_cutout.png
