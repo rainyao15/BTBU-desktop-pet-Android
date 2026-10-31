@@ -277,7 +277,21 @@ class Pet(
     }
 
     private fun push() {
+        syncSide()
         onMove(windowX().toInt(), y.toInt(), sizePx, heightPx)
+    }
+
+    /**
+     * 位置变了就检查一次朝向：宠物是靠 updateViewLayout 挪窗口的，
+     * 窗口位置变了 View 内容并不会自动重绘 —— 跨过屏幕中线时必须手动 invalidate，
+     * 否则就会出现「贴着右边却还朝右」这种"没反应"的现象。
+     * （拖拽/抛掷/走路/贴边藏都会走 push()，所以挂在 push 上最保险。）
+     */
+    private fun syncSide() {
+        val midX = context.resources.displayMetrics.widthPixels / 2f
+        val sideLeft = (x + sizePx / 2f) < midX
+        val want = if (faceOutward) sideLeft else !sideLeft
+        if (lastWantLeft != want) canvasView.invalidate()
     }
 
     /** 外部（Service）把窗口加上去之后调用一次，把当前位置同步给 WindowManager */
