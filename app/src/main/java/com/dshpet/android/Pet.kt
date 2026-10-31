@@ -612,6 +612,17 @@ class Pet(
             Mode.IDLE -> {}
         }
 
+        // 朝向只跟位置有关，而移动宠物是靠 updateViewLayout 挪窗口的 —— 窗口动了，
+        // View 内容不一定会重绘，所以跨过屏幕中线时必须主动 invalidate 一次，
+        // 否则就会出现「贴着右边却还朝右」这种"没反应"的现象。
+        val midX = context.resources.displayMetrics.widthPixels / 2f
+        val sideLeft = (x + sizePx / 2f) < midX
+        val wantSide = if (faceOutward) sideLeft else !sideLeft
+        if (lastWantLeft != wantSide) {
+            canvasView.invalidate()
+            active = true
+        }
+
         // 贴边躲藏：先按当前位置重新判定贴边状态。
         // 不能只信 snapEdge——松手贴边后又被拖走时它会过期，过期会导致在屏幕中间缩出去。
         if (!dragging) {
