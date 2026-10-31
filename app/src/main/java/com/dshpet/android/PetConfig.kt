@@ -110,8 +110,19 @@ class PetConfig(
          * 优先用「形象模式」，素材缺失/config 解析失败时退回上游 106 段动画。
          * 让 App 在任何素材状态下都能起来（降级哲学，同 Diag）。
          */
+        /**
+         * assets/webp 里到底有没有那 106 段动图。
+         * CI 默认 assets=false（不跑 ffmpeg 转码），所以发行包里通常没有；
+         * 此时 rig 模式必然一帧都播不出来（黑屏），必须钉在形象模式。
+         */
+        fun hasRigAssets(ctx: Context): Boolean = try {
+            ctx.assets.list("webp")?.any { it.endsWith(".webp", ignoreCase = true) } == true
+        } catch (t: Throwable) {
+            false
+        }
+
         fun loadBest(ctx: Context, imageMode: Boolean): PetConfig {
-            if (imageMode) {
+            if (imageMode || !hasRigAssets(ctx)) {
                 return try {
                     imagePet(ctx)
                 } catch (t: Throwable) {

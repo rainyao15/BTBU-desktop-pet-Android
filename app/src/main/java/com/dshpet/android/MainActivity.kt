@@ -478,7 +478,14 @@ class MainActivity : Activity() {
     }
 
     private fun renderImageChip() {
-        btnBtbuImage.text = if (Prefs.petImage(this)) "形象：鲸鱼娘立绘" else "形象：106 段动画"
+        val rig = PetConfig.hasRigAssets(this)
+        btnBtbuImage.text = when {
+            !rig -> "形象：鲸鱼娘立绘（动画包未打包）"
+            Prefs.petImage(this) -> "形象：鲸鱼娘立绘"
+            else -> "形象：106 段动画"
+        }
+        btnBtbuImage.isEnabled = rig
+        btnBtbuImage.alpha = if (rig) 1f else 0.45f
     }
 
     private fun renderBtbuStatus() {
