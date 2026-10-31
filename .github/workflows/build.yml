@@ -6,6 +6,11 @@ on:
     tags: [ 'v*' ]
   pull_request:
   workflow_dispatch:
+    inputs:
+      assets:
+        description: '同时转码上游 106 段动画（要 10~20 分钟；默认跳过，用鲸鱼娘立绘形象）'
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -76,7 +81,8 @@ jobs:
       - name: 修可执行位
         run: chmod +x gradlew tools/fetch-and-transcode.sh tools/*.mjs
 
-      - name: 还原素材（从上游 dsh-pet 转码，约 10~20 分钟）
+      - name: 还原素材（可选，默认跳过）
+        if: ${{ inputs.assets == true }}
         env:
           # 钉死上游版本：0.3.8 实测含 106 段 webm + config.jsonc，避免上游改版把 CI 弄红
           PKG: dsh-pet@0.3.8

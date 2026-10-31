@@ -56,6 +56,75 @@ class PetConfig(
     fun durationOf(slug: String): Int = durations[slug] ?: 9000
 
     companion object {
+        /**
+         * 形象模式：直接用 res/drawable-nodpi 里的立绘 + 动图当宠物，**不依赖上游那 106 段动画**。
+         *
+         * slug 用 "res:" 前缀区分（见 Pet.decodeSlug）：
+         *   res:pet_idle   → 610×610 的鲸鱼娘立绘（静态）
+         *   res:pet_rua    → 128×128 摸摸 GIF
+         *   res:pet_money  → 500×399 钱钱 GIF
+         *   res:pet_idle2  → 另一张立绘
+         *
+         * 节奏：idle 权重拉到 300（相对固定的 80 随机权重），所以大部分时间就静静趴着，
+         * 大约每几分钟自己动一下，跟上游挂件的行为一致。
+         */
+        fun imagePet(ctx: Context): PetConfig {
+            val spec = PetSpec(
+                id = "whale", name = "小鲸鱼", size = 462,
+                corner = "bottom-right", marginX = 24, marginY = 120,
+            )
+            val idle = listOf("res:pet_idle")
+            return PetConfig(
+                pets = listOf(spec),
+                names = mapOf(
+                    "res:pet_idle" to "待机", "res:pet_idle2" to "歪头",
+                    "res:pet_rua" to "摸摸", "res:pet_money" to "钱钱",
+                ),
+                durations = mapOf(
+                    "res:pet_idle" to 45_000, "res:pet_idle2" to 2_600,
+                    "res:pet_rua" to 1_800, "res:pet_money" to 3_000,
+                ),
+                idle = idle,
+                turn = idle,
+                drag = idle,
+                clicks = listOf("res:pet_rua"),
+                moves = emptyList(),
+                moveMinDist = 60.0,
+                moveMaxDist = 240.0,
+                moveMargin = 20.0,
+                categories = listOf(
+                    AnimCategory(
+                        id = "互动", weight = 1,
+                        actions = listOf("res:pet_rua", "res:pet_money", "res:pet_idle2"),
+                        noMirror = true,
+                    )
+                ),
+                weightIdle = 300,
+                weightTurn = 0,
+                weightMove = 0,
+                physics = PhysicsParams(1400.0, 0.78, 2.5, true, 1.0),
+            )
+        }
+
+        /**
+         * 优先用「形象模式」，素材缺失/config 解析失败时退回上游 106 段动画。
+         * 让 App 在任何素材状态下都能起来（降级哲学，同 Diag）。
+         */
+        fun loadBest(ctx: Context, imageMode: Boolean): PetConfig {
+            if (imageMode) {
+                return try {
+                    imagePet(ctx)
+                } catch (t: Throwable) {
+                    try { load(ctx) } catch (t2: Throwable) { imagePet(ctx) }
+                }
+            }
+            return try {
+                load(ctx)
+            } catch (t: Throwable) {
+                imagePet(ctx)
+            }
+        }
+
         /** dsh-pet 的移动距离是「基准宠物宽 462px」下的绝对像素，运行时按 size/462 等比缩放 */
         const val PET_REF_WIDTH = 462.0
         fun load(ctx: Context): PetConfig {

@@ -19,6 +19,7 @@ object Prefs {
     private const val KEY_HUD = "hud_on"
     private const val KEY_HUD_X = "hud_x"
     private const val KEY_HUD_Y = "hud_y"
+    private const val KEY_PET_IMAGE = "pet_image"
 
     const val DEFAULT_SIZE_DP = 150
     const val MIN_SIZE_DP = 80
@@ -131,5 +132,15 @@ object Prefs {
 
     fun setAlertAt(ctx: Context, key: String, at: Long) {
         sp(ctx).edit().putLong("alert_" + key, at).apply()
+    }
+
+    /**
+     * 形象模式：true = 用 res/drawable-nodpi 里的鲸鱼娘立绘 + GIF（跟 dsh 余额挂件同一套形象）；
+     * false = 用上游 dsh-pet 的 106 段透明动画（需要跑过 tools/fetch-and-transcode）。
+     */
+    fun petImage(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_PET_IMAGE, true)
+
+    fun setPetImage(ctx: Context, v: Boolean) {
+        sp(ctx).edit().putBoolean(KEY_PET_IMAGE, v).apply()
     }
 }

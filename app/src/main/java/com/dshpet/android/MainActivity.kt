@@ -53,6 +53,7 @@ class MainActivity : Activity() {
     private lateinit var btnBtbuHud: TextView
     private lateinit var accStatus: TextView
     private lateinit var btnBtbuSchedule: TextView
+    private lateinit var btnBtbuImage: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,11 +83,12 @@ class MainActivity : Activity() {
         btnBtbuHud = findViewById(R.id.btnBtbuHud)
         accStatus = findViewById(R.id.accStatus)
         btnBtbuSchedule = findViewById(R.id.btnBtbuSchedule)
+        btnBtbuImage = findViewById(R.id.btnBtbuImage)
         bindBtbu()
 
         // 宠物名字来自 pet-config.json（现在是「大肥鱼」）
         try {
-            PetConfig.load(this).pets.firstOrNull()?.let {
+            PetConfig.loadBest(this, Prefs.petImage(this)).pets.firstOrNull()?.let {
                 if (it.name.isNotBlank()) petName.text = it.name
             }
         } catch (_: Throwable) {
@@ -446,6 +448,13 @@ class MainActivity : Activity() {
             }
         }
 
+        renderImageChip()
+        btnBtbuImage.setOnClickListener {
+            Prefs.setPetImage(this, !Prefs.petImage(this))
+            renderImageChip()
+            if (Prefs.running(this)) PetService.reload(this)
+        }
+
         btnBtbuSchedule.setOnClickListener {
             try {
                 startActivity(android.content.Intent(this, com.dshpet.android.btbu.ScheduleActivity::class.java))
@@ -466,6 +475,10 @@ class MainActivity : Activity() {
             // 桌宠在跑才需要通知它重建窗口
             if (Prefs.running(this)) PetService.reload(this)
         }
+    }
+
+    private fun renderImageChip() {
+        btnBtbuImage.text = if (Prefs.petImage(this)) "形象：鲸鱼娘立绘" else "形象：106 段动画"
     }
 
     private fun renderBtbuStatus() {

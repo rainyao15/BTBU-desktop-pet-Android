@@ -314,8 +314,9 @@ class PetService : Service() {
             return
         }
 
+        val imgMode = Prefs.petImage(this)
         val conf = try {
-            PetConfig.load(this)
+            PetConfig.loadBest(this, imgMode)
         } catch (t: Throwable) {
             Diag.record(this, "spawnAll: 配置加载失败（pet-config.json）", t)
             return
@@ -342,7 +343,7 @@ class PetService : Service() {
                 var paramsRef: WindowManager.LayoutParams? = null
                 var viewRef: View? = null
 
-                val pet = Pet(this, conf, spec) { x, y, ww, hh ->
+                val pet = Pet(this, conf, spec, aspect = if (imgMode) 1.0 else 9.0 / 16.0) { x, y, ww, hh ->
                     val p = paramsRef
                     val v = viewRef
                     if (p != null && v != null) {

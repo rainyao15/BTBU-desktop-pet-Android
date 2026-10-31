@@ -30,6 +30,8 @@ class Pet(
     private val context: Context,
     val cfg: PetConfig,
     val spec: PetSpec,
+    /** 宠物盒高宽比：素材是 16:9 时用默认值；换成方形的立绘/动图时传 1.0 */
+    private val aspect: Double = 9.0 / 16.0,
     private val onMove: (x: Int, y: Int, w: Int, h: Int) -> Unit,
 ) {
     companion object {
@@ -48,6 +50,8 @@ class Pet(
         private const val HIDE_LERP = 0.18
         /** 载入解压/解码动画用的后台线程 */
         private val io = Executors.newSingleThreadExecutor()
+        /** 资源前缀：slug 以它开头时走 res 而不是 assets */
+        const val RES_PREFIX = "res:"
     }
 
     private val density = context.resources.displayMetrics.density
@@ -67,7 +71,7 @@ class Pet(
     private var facing = 1                 // 1 = 朝右，-1 = 朝左
     private var forcedNoMirror = false      // 文字类动作不镜像
 
-    private var current: AnimatedImageDrawable? = null
+    private var current: Drawable? = null
     private var currentSlug: String? = null
     private var loadToken = 0
 
@@ -150,7 +154,7 @@ class Pet(
 
     fun applyScale(sizeDp: Int) {
         sizePx = (sizeDp * density).toInt().coerceAtLeast(64)
-        heightPx = (sizePx * 9 / 16).coerceAtLeast(36)
+        heightPx = (sizePx * aspect).toInt().coerceAtLeast(36)
         canvasView.updateLayoutSize(sizePx, heightPx)
         push()
     }
@@ -296,7 +300,26 @@ class Pet(
     /** 当前是否在播（供链式调度判断） */
     private fun isPlaying(): Boolean {
         val d = current ?: return false
-        return d.isRunning
+        return (d as? AnimatedImageDrawable)?.isRunning ?: false
+    }
+
+    /**
+     * 解析一段素材：
+     *  - "res:pet_idle"  → res/drawable-nodpi 里同名资源（PNG 立绘 / GIF 动图都行）
+     *  - 其它             → assets/webp/<slug>.webp（上游那 106 段透明动画）
+     *
+     * 这样"用上游鲸鱼娘的静态图/动图当形象"和"播 106 段动画"能共存，切换只改配置。
+     */
+    private fun decodeSlug(slug: String): Drawable? {
+        if (slug.startsWith(RES_PREFIX)) {
+            val name = slug.removePrefix(RES_PREFIX)
+            val id = context.resources.getIdentifier(name, "drawable", context.packageName)
+            if (id == 0) return null
+            val src = ImageDecoder.createSource(context.resources, id)
+            return ImageDecoder.decodeDrawable(src)
+        }
+        val src = ImageDecoder.createSource(context.assets, "webp/$slug.webp")
+        return ImageDecoder.decodeDrawable(src)
     }
 
     private fun play(slug: String, onEnd: (() -> Unit)? = null) {
@@ -307,23 +330,25 @@ class Pet(
         loadToken++
         val token = loadToken
         io.execute {
-            var d: AnimatedImageDrawable? = null
+            var d: Drawable? = null
             try {
-                val src = ImageDecoder.createSource(context.assets, "webp/$slug.webp")
-                val decoded = ImageDecoder.decodeDrawable(src)
-                if (decoded is AnimatedImageDrawable) d = decoded
+                d = decodeSlug(slug)
+                if (d == null) Log.w(TAG, "解码为空 $slug")
             } catch (t: Throwable) {
                 Log.w(TAG, "解码失败 $slug: ${t.message}")
             }
             canvasView.post {
                 if (token != loadToken) return@post      // 已被更新的动画取代
                 val dd = d ?: run { onEnd?.invoke(); return@post }
-                dd.repeatCount = 1
-                dd.callback = canvasView
-                current?.stop()
+                val anim = dd as? AnimatedImageDrawable
+                if (anim != null) {
+                    anim.repeatCount = 1
+                    anim.callback = canvasView
+                }
+                (current as? AnimatedImageDrawable)?.stop()
                 current = dd
                 currentSlug = slug
-                dd.start()
+                anim?.start()
                 canvasView.invalidate()
                 Log.i(TAG, "play $slug ${cfg.durationOf(slug)}ms")
                 scheduleClipEnd(slug, token, onEnd)
@@ -343,7 +368,7 @@ class Pet(
         canvasView.postDelayed({
             if (token != loadToken) return@postDelayed
             Log.i(TAG, "end $slug token=$token cur=$loadToken")
-            current?.stop()
+            (current as? AnimatedImageDrawable)?.stop()
             onEnd?.invoke()
         }, ms)
     }
@@ -593,7 +618,7 @@ class Pet(
 
     fun release() {
         loadToken++
-        current?.stop()
+        (current as? AnimatedImageDrawable)?.stop()
         current = null
     }
 
