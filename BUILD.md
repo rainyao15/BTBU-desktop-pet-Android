@@ -149,6 +149,16 @@ export ANDROID_JAR='D:ndroid-sdk\platformsndroid-34ndroid.jar'
 然后 kotlinc 拿 `android.jar` 当 classpath 把 20 个源文件整体编译。
 改完代码先跑它，再 push，能省掉一轮 20 分钟的 CI 往返。
 
+## 资源自检
+
+```bash
+python tools/check_glue.py
+# [OK] R 引用 / 资源引用 / include 全部对得上（21 个 Kotlin 文件, 134 个资源）
+```
+
+它把 Kotlin 里所有 `R.xxx.yyy` 跟 `res/` 真实资源对一遍，再核 layout 里的 `@drawable/@color/@string/@layout`
+和 `<include>` 根节点。抓的是"R.id 写错 / 漏建 layout / 引用不存在的颜色"这类低级错误。
+
 ## 自检
 
 没有 Android SDK 也能先跑一遍资源体检（防止 R.id 写错、漏建 layout）：
