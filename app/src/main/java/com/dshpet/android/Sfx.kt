@@ -27,6 +27,9 @@ object Sfx {
     /** 排期上限：超过这个就不排了，直接播（避免某些机型时长读错导致一直不响） */
     private const val MAX_SCHEDULE_MS = 3_000L
 
+    /** 时长三级兜底都失败时的经验值（Ya1 实际约 0.4s） */
+    private const val FALLBACK_PRESS_MS = 430L
+
     private var pool: SoundPool? = null
     private var pressId = 0
     private var releaseId = 0
@@ -41,6 +44,9 @@ object Sfx {
     /** 已排期但还没触发的松开音 */
     private var pendingRelease: Runnable? = null
 
+    /** init 时存下的 Application Context，仅用于 Diag 打点 */
+    private var appCtx: Context? = null
+
     private val ui = Handler(Looper.getMainLooper())
 
     /** 总开关：在设置页手动控制，关掉后 press/release 直接静默 */
@@ -49,6 +55,7 @@ object Sfx {
 
     fun init(ctx: Context) {
         if (pool != null) return
+        appCtx = ctx
         try {
             val p = SoundPool.Builder()
                 .setMaxStreams(4)
@@ -102,6 +109,7 @@ object Sfx {
             }
             pendingRelease = r
             ui.postDelayed(r, remain)
+            if (appCtx != null) Diag.record(appCtx!!, "抬手音排期 ${remain}ms")
         } else {
             play(releaseId)
         }
@@ -118,22 +126,47 @@ object Sfx {
         }
     }
 
-    /** 读 raw 里音频的时长（毫秒）；读不到返回 0，此时退回「抬手立即播」 */
+    /**
+     * 读 raw 里音频的时长（毫秒）。三级兜底，最后一级是常量：
+     * MediaMetadataRetriever 对某些短小的 mp3 会解析不出 duration（实测返回 0），
+     * 所以先用 MediaPlayer.create（内部已 prepare，时长最可靠），再退回 retriever，
+     * 都失败就用经验常量 —— 排期只需要「大概多久放完」，差几十毫秒听不出来。
+     */
     private fun rawDurationMs(ctx: Context, resId: Int): Long {
         if (resId == 0) return 0L
+
+        // ① MediaPlayer.create：对 raw 资源最稳
+        val fromPlayer = try {
+            val mp = android.media.MediaPlayer.create(ctx, resId)
+            val d = if (mp == null) 0L else mp.duration.toLong()
+            try { mp?.release() } catch (_: Throwable) { }
+            d
+        } catch (t: Throwable) {
+            Diag.record(ctx, "音效时长(MediaPlayer)失败: ${t.message}")
+            0L
+        }
+        if (fromPlayer > 0L) return fromPlayer
+
+        // ② MediaMetadataRetriever
         var fd: AssetFileDescriptor? = null
         var mmr: MediaMetadataRetriever? = null
-        return try {
+        val fromRetriever = try {
             fd = ctx.resources.openRawResourceFd(resId)
             mmr = MediaMetadataRetriever()
             mmr.setDataSource(fd.fileDescriptor, fd.startOffset, fd.declaredLength)
             mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+            Diag.record(ctx, "音效时长(Retriever)失败: ${t.message}")
             0L
         } finally {
             try { mmr?.release() } catch (_: Throwable) { }
             try { fd?.close() } catch (_: Throwable) { }
         }
+        if (fromRetriever > 0L) return fromRetriever
+
+        // ③ 经验值：够用就行
+        Diag.record(ctx, "音效时长读不到，退回 ${FALLBACK_PRESS_MS}ms")
+        return FALLBACK_PRESS_MS
     }
 
     /** 资源不存在时返回 0（SoundPool 会忽略），不抛异常 */
