@@ -11,8 +11,8 @@ android {
         applicationId = "com.dshpet.android"
         minSdk = 28
         targetSdk = 34
-        versionCode = 25
-        versionName = "1.9.5-btbu"
+        versionCode = 26
+        versionName = "1.9.6-btbu"
     }
 
     // 固定签名：CI 每次都用同一个 keystore，这样后续版本能直接覆盖安装
@@ -55,3 +55,4 @@ android {
 dependencies {
     // 刻意零第三方依赖：只用 Android 框架 API（minSdk 28 足够）
 }
+
