@@ -86,6 +86,7 @@ class Pet(
      * 走路/拖拽时仍然只看 [facing]，否则会像倒着走。
      */
     private var faceOutward = false
+    private var lastWantLeft: Boolean? = null   // 只为 Diag 打点：朝向变化时记一条
     private var forcedNoMirror = false      // 文字类动作不镜像
 
     private var current: Drawable? = null
@@ -724,6 +725,15 @@ class Pet(
                 else -> !onLeftHalf
             }
             val mirror = !forcedNoMirror && wantLeft
+            if (lastWantLeft != wantLeft) {
+                lastWantLeft = wantLeft
+                Diag.record(
+                    context,
+                    "朝向 wantLeft=$wantLeft mirror=$mirror mode=$mode facing=$facing " +
+                        "x=${x.toInt()} mid=${context.resources.displayMetrics.widthPixels / 2} " +
+                        "outward=$faceOutward"
+                )
+            }
             var sy = 1.0
             if (squashActive) {
                 val u = ((SystemClock.uptimeMillis() - squashAtMs).toDouble() / Physics.SQ_DURATION_MS)
