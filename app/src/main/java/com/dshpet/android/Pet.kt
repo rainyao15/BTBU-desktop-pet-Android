@@ -79,10 +79,13 @@ class Pet(
 
     private var facing = 1                 // 1 = 朝右，-1 = 朝左（只决定「往哪走」，不再决定画法）
     /**
-     * 朝向规则：true = 面朝屏幕外侧（在左半屏就朝左、在右半屏就朝右）；
-     * false = 老行为，面朝屏幕中间（看着你）。动作菜单里的「翻转朝向」会切换这个值。
+     * 朝向规则（站定时）：
+     * false = 面朝屏幕**中间**（在右边就朝左、在左边就朝右，等于"看着你"）—— 默认；
+     * true  = 面朝屏幕外侧（在左半屏就朝左、在右半屏就朝右）。
+     * 动作菜单里的「翻转朝向」会切换这个值。
+     * 走路/拖拽时仍然只看 [facing]，否则会像倒着走。
      */
-    private var faceOutward = true
+    private var faceOutward = false
     private var forcedNoMirror = false      // 文字类动作不镜像
 
     private var current: Drawable? = null
