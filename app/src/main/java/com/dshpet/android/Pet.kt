@@ -77,7 +77,12 @@ class Pet(
     var y = 0.0
         private set
 
-    private var facing = 1                 // 1 = 朝右，-1 = 朝左
+    private var facing = 1                 // 1 = 朝右，-1 = 朝左（只决定「往哪走」，不再决定画法）
+    /**
+     * 朝向规则：true = 面朝屏幕外侧（在左半屏就朝左、在右半屏就朝右）；
+     * false = 老行为，面朝屏幕中间（看着你）。动作菜单里的「翻转朝向」会切换这个值。
+     */
+    private var faceOutward = true
     private var forcedNoMirror = false      // 文字类动作不镜像
 
     private var current: Drawable? = null
@@ -677,8 +682,9 @@ class Pet(
         play(slug) { scheduleNext() }
     }
 
-    /** 左右翻转朝向 */
+    /** 左右翻转朝向：切换「面朝外侧 / 面朝中间」两套规则 */
     fun flip() {
+        faceOutward = !faceOutward
         facing = if (facing == 1) -1 else 1
         forcedNoMirror = false
         canvasView.invalidate()
@@ -706,7 +712,15 @@ class Pet(
             val d = current ?: return
             val w = width.toFloat()
             val h = height.toFloat()
-            val mirror = !forcedNoMirror && facing < 0
+            // 朝向：走路/拖拽时看着自己前进的方向（不然像在倒着走），
+            // 站定时才按「在哪半边就朝哪边」来定。底图本身朝右，所以「朝左」= 镜像。
+            val onLeftHalf = x + sizePx / 2f < context.resources.displayMetrics.widthPixels / 2f
+            val wantLeft = when {
+                mode == Mode.MOVE -> facing < 0
+                faceOutward -> onLeftHalf
+                else -> !onLeftHalf
+            }
+            val mirror = !forcedNoMirror && wantLeft
             var sy = 1.0
             if (squashActive) {
                 val u = ((SystemClock.uptimeMillis() - squashAtMs).toDouble() / Physics.SQ_DURATION_MS)

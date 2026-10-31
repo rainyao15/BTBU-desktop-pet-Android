@@ -34,12 +34,13 @@ object Sfx {
             p.setOnLoadCompleteListener { _, _, status ->
                 if (status == 0) ready = true
             }
-            // 用 getIdentifier 而不是 R.raw.xxx：这两个 mp3 属于第三方素材、不随仓库分发，
-            // 直接写 R.raw.tap_press 会让"干净 clone"编译不过（AAPT 找不到资源）。
-            // 没有就静默，有就播——行为不变，但工程随时可编译。
+            // 音源来自 dsh-whale-widget（MIT）的「音效1」预设：
+            // res/raw/tap_press.mp3 = assets/Ya1.mp3（按下），res/raw/tap_release.mp3 = assets/Ya2.mp3（抬手）。
+            // 仍然走 getIdentifier 而不是 R.raw.xxx：素材缺失时静默降级，不会让编译失败。
             pressId = p.load(ctx, rawId(ctx, "tap_press"), 1)
             releaseId = p.load(ctx, rawId(ctx, "tap_release"), 1)
             pool = p
+            Diag.record(ctx, "音效就绪: press=$pressId release=$releaseId")
         } catch (t: Throwable) {
             Diag.record(ctx, "音效初始化失败: ${t.message}")
         }
