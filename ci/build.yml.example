@@ -1,0 +1,51 @@
+name: build-apk
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安装 ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 SDK 组件
+        run: sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: 还原素材（从上游 dsh-pet 转码）
+        run: |
+          sudo ln -sf "$(which ffmpeg)" /usr/local/bin/ffmpeg
+          chmod +x tools/fetch-and-transcode.sh
+          ./tools/fetch-and-transcode.sh
+
+      - name: 构建 debug APK
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          ./gradlew :app:assembleDebug --no-daemon
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-pet-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk

@@ -1,0 +1,32 @@
+# 构建产物
+build/
+.gradle/
+local.properties
+
+# 生成出来的素材与配置（可由 tools/fetch-and-transcode.ps1 重现）
+app/src/main/assets/webp/
+app/src/main/assets/pet-config.json
+anim-map.json
+
+# 打包产物
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# 调试残留
+*.log
+
+# 第三方素材：点击音效 + 鲸鱼娘立绘（来自 dsh-whale-widget，版权归原作者，不随仓库分发）
+# 想构建带音效的版本，按 README「许可与署名」一节自行放入
+app/src/main/res/raw/*.mp3
+app/src/main/res/drawable/whale_cutout.png
+app/src/main/res/drawable-nodpi/whale_selfie.png
+
+# 但为了"干净 clone 就能编译"，我们放了两张 1x1 透明占位图（自己的，不是原作者素材）
+!app/src/main/res/drawable/whale_cutout.png
+!app/src/main/res/drawable-nodpi/whale_selfie.png

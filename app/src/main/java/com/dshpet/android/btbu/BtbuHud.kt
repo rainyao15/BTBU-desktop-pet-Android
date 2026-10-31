@@ -1,0 +1,173 @@
+package com.dshpet.android.btbu
+
+import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.widget.LinearLayout
+import android.widget.TextView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * 桌面小卡（HUD）：时间 + 周次 + 两个余额 + 下一节课。
+ *
+ * 为什么单独一个悬浮窗而不是塞进宠物那个 View：
+ *  宠物窗口是按 16:9 素材比例裁的，往里塞文字会跟动画打架；单独一层卡片可以
+ *  独立定位、独立高度、独立点击，也不影响宠物的命中框。
+ *
+ * 刷新节奏：
+ *  - 时间/倒计时：1 秒（纯本地，不耗电）
+ *  - 数据派生（当前课/下一节）：20 秒重算一次（SharedPreferences 读缓存）
+ *  - 网络：15 分钟拉一次，且必须已配账号
+ */
+class BtbuHud(private val ctx: Context, private val wm: WindowManager) {
+
+    private val handler = Handler(Looper.getMainLooper())
+    private val fmt = SimpleDateFormat("HH:mm:ss", Locale.CHINA)
+
+    private var root: LinearLayout? = null
+    private var tvClock: TextView? = null
+    private var tvBalance: TextView? = null
+    private var tvNext: TextView? = null
+
+    private var cached: BtbuStore.HudState? = null
+    private var cachedAt = 0L
+    private var lastNetSyncAt = 0L
+    private var released = false
+
+    private val tick = object : Runnable {
+        override fun run() {
+            if (released) return
+            try {
+                render()
+            } catch (_: Throwable) {
+            }
+            handler.postDelayed(this, 1000L)
+        }
+    }
+
+    fun show() {
+        if (root != null) return
+        val d = ctx.resources.displayMetrics.density
+        fun dp(v: Int) = (v * d).toInt()
+
+        val box = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(14), dp(10), dp(14), dp(11))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(0xE81A2336.toInt())
+                setStroke(dp(1), 0x803C5385.toInt())
+            }
+        }
+
+        val cClock = TextView(ctx).apply {
+            setTextColor(0xFFEEF3FF.toInt())
+            textSize = 20f
+            letterSpacing = 0.04f
+            typeface = android.graphics.Typeface.MONOSPACE
+            gravity = Gravity.CENTER
+        }
+        val cBalance = TextView(ctx).apply {
+            setTextColor(0xFF6BE3B0.toInt())
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(4), 0, 0)
+        }
+        val cNext = TextView(ctx).apply {
+            setTextColor(0xFF9DB1D5.toInt())
+            textSize = 11.5f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(3), 0, 0)
+        }
+        tvClock = cClock
+        tvBalance = cBalance
+        tvNext = cNext
+        box.addView(cClock)
+        box.addView(cBalance)
+        box.addView(cNext)
+        box.setOnClickListener {
+            // 戳一下小卡 = 立刻刷新（跟宠物互动是同一套心智）
+            BtbuSync.refreshAsync(ctx)
+            lastNetSyncAt = System.currentTimeMillis()
+        }
+        root = box
+
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            android.graphics.PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dp(12)
+            y = dp(96)
+        }
+        try {
+            wm.addView(box, lp)
+        } catch (_: Throwable) {
+            root = null
+            return
+        }
+        render()
+        handler.removeCallbacks(tick)
+        handler.post(tick)
+    }
+
+    private fun render() {
+        val now = System.currentTimeMillis()
+        // 数据派生 20 秒才重算一次（JSON 解析不必每秒做）
+        if (cached == null || now - cachedAt > 20_000L) {
+            cached = runCatching { BtbuSync.state(ctx) }.getOrNull()
+            cachedAt = now
+        }
+        // 网络 15 分钟一次
+        if (now - lastNetSyncAt > 15 * 60_000L && BtbuSync.configured(ctx)) {
+            lastNetSyncAt = now
+            BtbuSync.refreshAsync(ctx)
+        }
+
+        val st = cached
+        tvClock?.text = fmt.format(Date())
+        if (st == null || !st.hasData) {
+            tvBalance?.setTextColor(0xFF9DB1D5.toInt())
+            tvBalance?.text = if (BtbuSync.configured(ctx)) "等待第一次同步…" else "未配置账号"
+            tvNext?.text = "长按宠物 → 设置里填学号"
+            return
+        }
+
+        val staleMin = ((now - st.syncedAt) / 60_000L).toInt()
+        tvBalance?.setTextColor(if (staleMin > 60) 0xFFFFC46B.toInt() else 0xFF6BE3B0.toInt())
+        tvBalance?.text = "第${st.week}周 · " + st.balanceLine() +
+            if (staleMin > 30) "  (${staleMin / 60}h 前)" else ""
+
+        val netWarn = st.net?.status == "服务受限"
+        tvNext?.setTextColor(if (netWarn) 0xFFFFC46B.toInt() else 0xFF9DB1D5.toInt())
+        tvNext?.text = if (netWarn && st.current == null) st.nextLine() + " · 网要没了"
+        else st.nextLine()
+    }
+
+    fun release() {
+        released = true
+        handler.removeCallbacks(tick)
+        root?.let {
+            try {
+                wm.removeView(it)
+            } catch (_: Throwable) {
+            }
+        }
+        root = null
+        tvClock = null
+        tvBalance = null
+        tvNext = null
+    }
+}

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">北工商桌宠</string>
+    <string name="pet_name_default">大肥鱼</string>
+    <string name="subtitle">校园卡 / 校园网网费 / 课表 · 一眼就能看到</string>
+
+    <string name="channel_name">桌宠常驻</string>
+    <string name="notif_title">大肥鱼在桌面上</string>
+    <string name="notif_text">点这里回到设置</string>
+    <string name="notif_stop">收起来</string>
+
+    <string name="card_state">现在的状态</string>
+    <string name="row_overlay">悬浮窗权限</string>
+    <string name="row_notif">通知权限</string>
+    <string name="row_run">运行状态</string>
+    <string name="chip_ok">已开启</string>
+    <string name="chip_no">未授权</string>
+    <string name="chip_on_state">在桌面上</string>
+    <string name="chip_off_state">已收起</string>
+
+    <string name="btn_start">🐟  放出来</string>
+    <string name="btn_stop">收起来</string>
+    <string name="btn_overlay">授权悬浮窗</string>
+    <string name="btn_notif">授权通知</string>
+
+    <string name="size_title">大小</string>
+    <string name="size_default">150 dp</string>
+    <string name="size_value">%1$d dp</string>
+
+    <string name="sound_title">点击音效</string>
+    <string name="sound_on">开启</string>
+    <string name="sound_off">关闭</string>
+
+    <string name="pets_title">桌宠只数</string>
+    <string name="pets_value">%1$d 只</string>
+    <string name="bubble_title">碎碎念</string>
+    <string name="edge_title">贴边躲藏</string>
+    <string name="menu_speak">💬 让她说句话</string>
+
+    <string name="lines_title">台词库</string>
+    <string name="lines_hint">点「编辑台词」直接在这里改：按情境分类、一行一句、改完立刻生效。想批量改也可以「导出到文件」，用电脑或别的编辑器改好再「从文件导入」。</string>
+    <string name="lines_path">当前：%1$s · 共 %2$d 句</string>
+    <string name="lines_edit">✏️ 编辑台词</string>
+    <string name="lines_export">导出到文件…</string>
+    <string name="lines_import">从文件导入…</string>
+    <string name="lines_reload">重新加载</string>
+    <string name="lines_exported">台词模板已导出：\n%1$s\n用文件管理器改完，回来点「重新加载」。</string>
+    <string name="lines_reloaded">已重新加载：%1$d 句（%2$s）</string>
+    <string name="lines_reload_fail">没找到可编辑的台词文件，先点「导出到文件」或「编辑台词」。</string>
+    <string name="lines_builtin">内置 assets/lines.json（还没导出过模板）</string>
+
+    <string name="lines_back">‹ 返回</string>
+    <string name="lines_editor_title">台词库</string>
+    <string name="lines_editor_hint">一行一句，空行和重复的会自动去掉。改完点「保存并生效」，桌宠马上就会用新台词。</string>
+    <string name="lines_save">保存并生效</string>
+    <string name="lines_saved">已保存「%1$s」%2$d 句</string>
+    <string name="lines_restore_one">这一类恢复默认</string>
+    <string name="lines_restore_all">全部恢复成内置台词</string>
+    <string name="lines_restore_all_msg">你改过的所有台词都会被丢掉，确定吗？</string>
+    <string name="lines_restored">「%1$s」已恢复成内置台词</string>
+    <string name="lines_restored_all">已全部恢复成内置台词（%1$d 句）</string>
+    <string name="lines_editor_count">共 %1$d 句</string>
+    <string name="lines_export_ok">已导出到：%1$s</string>
+    <string name="lines_export_fail">导出失败，换个位置再试试。</string>
+    <string name="lines_import_ok">已导入 %1$d 句台词</string>
+    <string name="lines_import_fail">这个文件不是台词库格式（需要 version 和 categories 字段）。</string>
+
+    <string name="keepalive_title">后台保活</string>
+    <string name="keepalive_hint">开启后：从「最近任务」里隐藏（清后台时不容易被误删），被系统回收会自动回来，并申请「忽略电池优化」。部分机型还要在系统设置里允许自启动。</string>
+
+    <string name="menu_title">选择动作</string>
+
+    <string name="need_overlay">还没有悬浮窗权限，先点「授权悬浮窗」。</string>
+</resources>
