@@ -65,6 +65,12 @@ object BtbuSync {
                 // 把「周次是怎么算出来的」记进诊断：第 N 周对不上时，这一行直接说明问题
                 try {
                     com.dshpet.android.Diag.record(app, "同步完成 · " + store(app).weekInfo())
+                    // 课表到底存下来没有：courseCount 长期是 0 就说明解析/落盘有问题
+                    com.dshpet.android.Diag.record(
+                        app,
+                        "课表落地：本周 ${store(app).coursesOf(store(app).weekOf()).size} 门 · " +
+                            "全表 ${store(app).allCourses().size} 门 · 节次 ${store(app).lessonsOf().size} 条",
+                    )
                 } catch (_: Throwable) {
                 }
                 // 让头顶气泡/通知栏立刻反映新数据（以前要等下一次 60 秒检查）

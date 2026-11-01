@@ -189,11 +189,19 @@ class BtbuStore(ctx: Context) {
                 android.util.Log.w("BtbuStore", "curWeek=${s.curWeek} 与推算 $expected 差太多，沿用推算值")
             }
         }
+        // 节次表：键必须是 String。s.lessons 是 Map<Int, …>，直接喂 JSONObject(Map)
+        // 会在内部 (String) entry.getKey() 上抛 ClassCastException（Integer→String），
+        // 让整个 editor 链在 apply() 之前就炸掉 —— 课表永远存不进去（"最近没课 摸鱼"的元凶）。
+        val lessonJson = JSONObject().apply {
+            for ((idx, span) in s.lessons) {
+                put(idx.toString(), JSONArray().put(span.first).put(span.second))
+            }
+        }
         sp.edit()
             .putString("courses", arr.toString())
             .putLong("weekAnchorDay", monday.toEpochDay())
             .putLong("weekAnchorAt", at)
-            .putString("lessons", JSONObject(s.lessons.mapValues { listOf(it.value.first, it.value.second) }).toString())
+            .putString("lessons", lessonJson.toString())
             .putString("term", "${s.xn}-${s.xq}|${s.describe}")
             .putInt("curWeek", base)
             .putInt("curWeekRaw", s.curWeek)
