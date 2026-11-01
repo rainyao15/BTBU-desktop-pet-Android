@@ -52,7 +52,8 @@ class MainActivity : Activity() {
     private lateinit var btnBtbuLogin: TextView
     private lateinit var btnBtbuHud: TextView
     private lateinit var accStatus: TextView
-    private lateinit var btnBtbuSchedule: TextView
+    private lateinit var btnWeekMinus: TextView
+    private lateinit var btnWeekPlus: TextView
     private lateinit var btnBtbuImage: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -82,7 +83,8 @@ class MainActivity : Activity() {
         btnBtbuLogin = findViewById(R.id.btnBtbuLogin)
         btnBtbuHud = findViewById(R.id.btnBtbuHud)
         accStatus = findViewById(R.id.accStatus)
-        btnBtbuSchedule = findViewById(R.id.btnBtbuSchedule)
+        btnWeekMinus = findViewById(R.id.btnWeekMinus)
+        btnWeekPlus = findViewById(R.id.btnWeekPlus)
         btnBtbuImage = findViewById(R.id.btnBtbuImage)
         bindBtbu()
 
@@ -455,13 +457,9 @@ class MainActivity : Activity() {
             if (Prefs.running(this)) PetService.reload(this)
         }
 
-        btnBtbuSchedule.setOnClickListener {
-            try {
-                startActivity(android.content.Intent(this, com.dshpet.android.btbu.ScheduleActivity::class.java))
-            } catch (t: Throwable) {
-                Diag.record(this, "打开课表失败", t)
-            }
-        }
+        // 教学周校正：整周课表页已去掉，这里只留"周次对不上时点一下"
+        btnWeekMinus.setOnClickListener { shiftWeek(-1) }
+        btnWeekPlus.setOnClickListener { shiftWeek(1) }
 
         // 打开设置页就顺手同步一次（静默，失败不打扰）
         if (BtbuSync.configured(this)) {
@@ -486,6 +484,19 @@ class MainActivity : Activity() {
         }
         btnBtbuImage.isEnabled = rig
         btnBtbuImage.alpha = if (rig) 1f else 0.45f
+    }
+
+    /** 学校周次和你数的对不上时：按今天重锚到相邻的一周，之后继续自己往下走 */
+    private fun shiftWeek(delta: Int) {
+        try {
+            val store = com.dshpet.android.btbu.BtbuStore(this)
+            store.shiftWeek(delta)
+            renderBtbuStatus()
+            if (Prefs.running(this)) PetService.dataChanged(this)
+            Toast.makeText(this, "已校正：" + store.weekInfo(), Toast.LENGTH_SHORT).show()
+        } catch (t: Throwable) {
+            Diag.record(this, "教学周校正失败", t)
+        }
     }
 
     private fun renderBtbuStatus() {

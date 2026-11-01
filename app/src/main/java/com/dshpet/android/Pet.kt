@@ -259,6 +259,13 @@ class Pet(
     /** 给台词气泡等外部定位用的窗口左边缘（含躲藏位移） */
     val windowLeftPx: Int get() = windowX().toInt()
 
+    /**
+     * 盒子中心（含躲藏位移，不含镜像/墨迹修正）。
+     * 气泡的水平锚点就用它：**只跟窗口位置有关**，所以她翻面、换动作、缩进边里时
+     * 气泡都不会横向跳一下 —— 这是"看着像一个整体"的前提。
+     */
+    val boxCenterX: Double get() = windowX() + sizePx / 2.0
+
     /** 回到配置的角落（右键菜单/设置里用） */
     fun resetPosition() {
         mode = Mode.IDLE

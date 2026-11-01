@@ -151,13 +151,30 @@ class BtbuStore(ctx: Context) {
         // 第 1 周开学时最明显），而是"今天周一 - 锚点周一"。
         val today = java.time.LocalDate.now()
         val monday = today.minusDays((today.dayOfWeek.value - 1).toLong())
+        // 服务器给的 curWeek 先做合理性检查：
+        //  · 超出 1..totalWeek（学期未开始时有些库会回 0）→ 不信
+        //  · 和"按旧锚点推算的周次"差超过 2 周 → 不信（防止偶发脏数据把周次打回第 1 周）
+        val total = s.totalWeek.coerceAtLeast(1)
+        val expected = weekNow()
+        val rawOk = s.curWeek in 1..total
+        val base = when {
+            !rawOk -> expected.coerceIn(1, total).also {
+                android.util.Log.w("BtbuStore", "curWeek=${s.curWeek} 非法，沿用推算值 $it")
+            }
+            expected <= 1 -> s.curWeek
+            kotlin.math.abs(s.curWeek - expected) <= 2 -> s.curWeek
+            else -> expected.coerceIn(1, total).also {
+                android.util.Log.w("BtbuStore", "curWeek=${s.curWeek} 与推算 $expected 差太多，沿用推算值")
+            }
+        }
         sp.edit()
             .putString("courses", arr.toString())
             .putLong("weekAnchorDay", monday.toEpochDay())
             .putLong("weekAnchorAt", at)
             .putString("lessons", JSONObject(s.lessons.mapValues { listOf(it.value.first, it.value.second) }).toString())
             .putString("term", "${s.xn}-${s.xq}|${s.describe}")
-            .putInt("curWeek", s.curWeek.coerceAtLeast(1))
+            .putInt("curWeek", base)
+            .putInt("curWeekRaw", s.curWeek)
             .putInt("totalWeek", s.totalWeek.coerceAtLeast(1))
             .putLong("scheduleAt", at)
             .apply()
@@ -252,16 +269,33 @@ class BtbuStore(ctx: Context) {
     private fun mondayEpochDay(d: java.time.LocalDate): Long =
         d.toEpochDay() - (d.dayOfWeek.value - 1).toLong()
 
+    /**
+     * 教学周校正：把"当前周"按今天重新钉一次。
+     * 学校周次口径和你数的差一周时，点一下就好；之后仍然按周一自动往下走。
+     */
+    fun shiftWeek(delta: Int) {
+        val total = sp.getInt("totalWeek", 25).coerceAtLeast(1)
+        val w = (weekNow() + delta).coerceIn(1, total)
+        val today = java.time.LocalDate.now()
+        val monday = today.minusDays((today.dayOfWeek.value - 1).toLong())
+        sp.edit()
+            .putInt("curWeek", w)
+            .putLong("weekAnchorDay", monday.toEpochDay())
+            .putLong("weekAnchorAt", System.currentTimeMillis())
+            .apply()
+    }
+
     /** 自检用：周次是怎么算出来的 */
     fun weekInfo(): String {
         val total = sp.getInt("totalWeek", 25)
         val base = sp.getInt("curWeek", 1)
+        val raw = sp.getInt("curWeekRaw", base)
         val anchor = sp.getLong("weekAnchorDay", 0L)
         val anchorTxt = if (anchor == 0L) "无锚点(老缓存)"
         else java.time.LocalDate.ofEpochDay(anchor).toString() + "(周一)"
         val termStart = if (anchor == 0L) "--"
         else java.time.LocalDate.ofEpochDay(anchor - (base - 1) * 7L).toString()
-        return "第 ${weekNow()}/${total} 周 · 服务器 curWeek=$base · 锚点=$anchorTxt · 推算学期首周周一=$termStart"
+        return "第 ${weekNow()}/${total} 周 · 采用 curWeek=$base（服务器原值 $raw）· 锚点=$anchorTxt · 推算学期首周周一=$termStart"
     }
 
     private fun readCourses(): List<Course> {
@@ -280,15 +314,20 @@ class BtbuStore(ctx: Context) {
     }
 
     private fun readLessons(): Map<Int, Pair<String, String>> {
-        val raw = sp.getString("lessons", null) ?: return emptyMap()
-        val o = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyMap()
-        return o.keys().asSequence().associate { k ->
-            val a = o.optJSONArray(k)
-            k.toInt() to ((a?.optString(0) ?: "--:--") to (a?.optString(1) ?: "--:--"))
-        }
+        val raw = sp.getString("lessons", null) ?: return DEFAULT_LESSONS
+        val o = runCatching { JSONObject(raw) }.getOrNull() ?: return DEFAULT_LESSONS
+        val saved = o.keys().asSequence().mapNotNull { k ->
+            val idx = k.toIntOrNull() ?: return@mapNotNull null
+            val a = o.optJSONArray(k) ?: return@mapNotNull null
+            val s = a.optString(0)
+            val e = a.optString(1)
+            if (s.isBlank() || e.isBlank() || s == "--:--") null else idx to (s to e)
+        }.toMap()
+        // 服务器给的优先，缺的用内置表补
+        return DEFAULT_LESSONS + saved
     }
 
-    // ---------------- 给"整周课表"页用的读取接口 ----------------
+    // ---------------- 课表数据的读取接口（气泡/"下一节课"用） ----------------
 
     /** 某一周要上的课（已按 skzc 位图过滤） */
     fun coursesOf(week: Int): List<Course> = readCourses().filter { it.activeAt(week) }
@@ -312,6 +351,27 @@ class BtbuStore(ctx: Context) {
     fun hasToken(): Boolean = !sp.getString("token", null).isNullOrEmpty()
 
     companion object {
+        /**
+         * 内置节次时间表（照抄学校 getCourseTimeConfig.do 的真实响应）。
+         * 为什么要有：只要那个接口偶尔失败一次，所有课的时间就会变成 "--:--"，
+         * 表现就是"上课时间对不上"。有兜底就永远不会没时间。
+         */
+        val DEFAULT_LESSONS: Map<Int, Pair<String, String>> = mapOf(
+            1 to ("08:00" to "08:45"),
+            2 to ("08:50" to "09:35"),
+            3 to ("09:50" to "10:35"),
+            4 to ("10:40" to "11:25"),
+            5 to ("11:30" to "12:15"),
+            6 to ("13:40" to "14:25"),
+            7 to ("14:30" to "15:15"),
+            8 to ("15:30" to "16:15"),
+            9 to ("16:20" to "17:05"),
+            10 to ("17:10" to "17:55"),
+            11 to ("18:45" to "19:30"),
+            12 to ("19:35" to "20:20"),
+            13 to ("20:25" to "21:10"),
+        )
+
         fun wdName(w: Int) = when (w) {
             1 -> "周一"; 2 -> "周二"; 3 -> "周三"; 4 -> "周四"
             5 -> "周五"; 6 -> "周六"; else -> "周日"

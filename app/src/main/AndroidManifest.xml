@@ -49,12 +49,6 @@
                 android:value="floating_desktop_pet" />
         </service>
 
-        <activity
-            android:name=".btbu.ScheduleActivity"
-            android:exported="false"
-            android:label="整周课表"
-            android:theme="@android:style/Theme.Material.NoActionBar" />
-
         <!-- 桌面挂件：真正嵌在桌面网格里 -->
         <receiver
             android:name=".btbu.BtbuWidgetProvider"

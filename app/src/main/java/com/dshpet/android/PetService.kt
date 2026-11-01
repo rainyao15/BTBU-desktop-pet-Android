@@ -135,8 +135,6 @@ class PetService : Service() {
     private var dbPill: View? = null
     private var dbTimer: android.widget.Chronometer? = null
     private var dbSig = ""
-    /** 上次气泡重排(measure)的时间：飞行中最多 12 次/秒，别让缩字迭代拖慢帧率 */
-    private var lastBubbleMeasureMs = 0L
     private var tapCount = 0
     private var tapWindowMs = 0L
 
@@ -502,7 +500,8 @@ class PetService : Service() {
      *   大数字（网 15.00  卡 25.80）
      *   副行（下一节课，浅蓝灰）
      * 底部一条绿色倒计时：正在上课数到下课，否则数到下一节（Chronometer，系统驱动，零耗电）。
-     * 点它 → 打开整周课表。**全 App 只有这一块气泡**：说台词时把数据行换成一句话，到点切回来。
+     * 单击 → 翻页（下一节课 / 校园卡余额 / 网费余额）；长按 → 立刻同步一次。
+     * **全 App 只有这一块气泡**：说台词时把数据行换成一句话，到点切回来。
      */
     /**
      * 常驻气泡：dsh 鲸鱼挂件同款「手绘思考气泡」（几何见 res/drawable/btbu_bubble.xml）。
@@ -510,7 +509,8 @@ class PetService : Service() {
      * 版式照上游：标题（北工商 · 第 N 周）/ 大数字（网 15.00  卡 25.80）/ 副行（下一节课）
      * + 底部绿色倒计时药丸（正在上课数到下课，否则数到下一节；Chronometer 系统驱动，零耗电）。
      * 字号随气泡宽度按上游 u 比例联动，ThoughtBubble 会按内容自动缩字，气泡本体永不变形。
-     * 点它 → 打开整周课表。**全 App 只有这一块气泡**：说台词时把数据行换成一句话，到点切回来。
+     * 单击 → 翻页（下一节课 / 校园卡余额 / 网费余额）；长按 → 立刻同步一次。
+     * **全 App 只有这一块气泡**：说台词时把数据行换成一句话，到点切回来。
      */
     private fun ensureDataBubble() {
         val w = wm ?: return
@@ -577,23 +577,25 @@ class PetService : Service() {
                     Diag.record(this@PetService, "气泡翻页失败", t)
                 }
             }
-            // 长按 = 打开整周课表（以前是单击，现在让位给翻页）
+            // 长按 = 立刻同步一次（整周课表页已移除，这里改成刷数据）
             setOnLongClickListener {
                 if (isSpeaking()) return@setOnLongClickListener false
                 try {
-                    startActivity(
-                        Intent(this@PetService, com.dshpet.android.btbu.ScheduleActivity::class.java)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
+                    com.dshpet.android.btbu.BtbuSync.refreshAsync(this@PetService) { ok ->
+                        updateDataBubble(true)
+                        updateNotification()
+                        Diag.record(this@PetService, if (ok) "长按气泡：同步完成" else "长按气泡：同步失败")
+                    }
                     true
                 } catch (t: Throwable) {
-                    Diag.record(this@PetService, "打开课表失败", t)
+                    Diag.record(this@PetService, "长按气泡同步失败", t)
                     false
                 }
             }
         }
 
-        val bw = fittedDataBubbleWidth(pet)
+        val bw = bubbleWidthPx(pet)
+        box.mirrorBubble = pet.mirrored
         box.measure(
             View.MeasureSpec.makeMeasureSpec(bw, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
@@ -607,8 +609,7 @@ class PetService : Service() {
             PixelFormat.TRANSLUCENT,
         )
         lp.gravity = Gravity.TOP or Gravity.START
-        box.mirrorBubble = pet.mirrored
-        placeBubble(lp, bw, bh, pet, box.inkCenterX, com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP)
+        placeBubble(lp, bw, bh, pet, TAIL_COL_CX, com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP)
         try {
             w.addView(box, lp)
             dbRoot = box
@@ -633,28 +634,6 @@ class PetService : Service() {
 
     /** 状态栏/顶部安全区：气泡不允许越过这条线 */
     private fun topInsetPx(): Int = dpPx(28)
-
-    /** 气泡「尾巴尖高度 / 气泡宽度」：700/1026 × 673/700 ≈ 0.656 */
-    private val bubbleTipPerWidth =
-        (700f / 1026f) * com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP
-
-    /**
-     * 按「头顶还剩多少地方」算气泡宽度 —— 气泡和宠物的相对位置要固定，
-     * 所以宁可让气泡变小，也不把它翻到宠物下面去。
-     *
-     * 三段行为（她默认在右下，头顶空间充足 → 满尺寸）：
-     *  · 头顶够 → 满尺寸；
-     *  · 头顶不够 → 等比缩小，最小到 62%（再小字就看不清了）；
-     *  · 贴死顶部 → 用最小尺寸 + 尾巴对不上也只在安全区夹住，永不翻到脚底。
-     */
-    private fun fittedDataBubbleWidth(pet: Pet): Int {
-        val want = bubbleWidthPx(pet)
-        val minW = (want * 0.62f).toInt()
-        val room = pet.y.toInt() - dpPx(6) - topInsetPx()
-        if (room <= 0) return minW
-        val maxW = (room / bubbleTipPerWidth).toInt()
-        return maxOf(minW, minOf(want, maxW))
-    }
 
     /**
      * 内容层：按当前模式（数据 / 台词）把三行文字和倒计时药丸写好。
@@ -809,7 +788,8 @@ class PetService : Service() {
         val box = dbRoot ?: return
         val pet = dbPet ?: return
         val lp = dbParams ?: return
-        val bw = fittedDataBubbleWidth(pet)
+        val bw = bubbleWidthPx(pet)
+        box.mirrorBubble = pet.mirrored
         box.measure(
             View.MeasureSpec.makeMeasureSpec(bw, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
@@ -817,8 +797,7 @@ class PetService : Service() {
         val bh = box.measuredHeight.coerceAtLeast(dpPx(40))
         lp.width = bw
         lp.height = bh
-        box.mirrorBubble = pet.mirrored
-        placeBubble(lp, bw, bh, pet, box.inkCenterX, com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP)
+        placeBubble(lp, bw, bh, pet, TAIL_COL_CX, com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP)
         try {
             wm?.updateViewLayout(box, lp)
         } catch (_: Throwable) {
@@ -830,30 +809,19 @@ class PetService : Service() {
         relayoutBubble()
     }
 
+    /**
+     * 每帧 / 每次移动都跟着摆一次。**不量尺寸、不改尺寸** —— 气泡宽高只跟宠物大小有关，
+     * 位置只跟宠物窗口位置有关，所以它俩永远是同一个整体（相对距离恒定）。
+     */
     private fun followDataBubble() {
         val box = dbRoot ?: return
         val lp = dbParams ?: return
         val pet = dbPet ?: return
         val oldX = lp.x
         val oldY = lp.y
-        val oldW = lp.width
-        val oldH = lp.height
-        // 头顶剩多少地方决定气泡多大：变了就重排一次。
-        // 量化到 8dp 台阶，否则拖动时每帧都要 measure（ThoughtBubble 里还有 3 轮缩字迭代）。
-        val fitted = fittedDataBubbleWidth(pet)
-        val t = SystemClock.uptimeMillis()
-        if (abs(fitted - lp.width) >= dpPx(8) && t - lastBubbleMeasureMs > 80) {
-            lastBubbleMeasureMs = t
-            box.measure(
-                View.MeasureSpec.makeMeasureSpec(fitted, View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-            )
-            lp.width = fitted
-            lp.height = box.measuredHeight.coerceAtLeast(dpPx(40))
-        }
         box.mirrorBubble = pet.mirrored
-        placeBubble(lp, box.measuredWidth, box.measuredHeight, pet, box.inkCenterX, com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP)
-        if (lp.x == oldX && lp.y == oldY && lp.width == oldW && lp.height == oldH) return
+        placeBubble(lp, box.measuredWidth, box.measuredHeight, pet, TAIL_COL_CX, com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP)
+        if (lp.x == oldX && lp.y == oldY) return
         try {
             wm?.updateViewLayout(box, lp)
         } catch (_: Throwable) {
@@ -912,37 +880,50 @@ class PetService : Service() {
         relayoutBubble()
     }
 
+    // ------------------------------------------------------------ 气泡定位（几何固定）
+
     /**
-     * 把气泡窗口摆到宠物「看得见的那半个身子」的正上方。
+     * 气泡里「尾巴那一列小圆点」的横向中心占窗口宽度的比例。
+     * 路径实测：椭圆1 中心 x=352（r=37.5）、椭圆2 中心 x=442（r=24.5），
+     * 两列的视觉中心 390.5 → 390.5 / 1026 ≈ 0.3806。
      *
-     * 两个错位源（以前就是它们让气泡看着不对齐）：
-     *  ① 宠物盒中心 ≠ 立绘可见中心：素材四周留白不对称，墨迹中心实测 0.536，
-     *     镜像后变 0.464 —— 所以必须问 Pet.visibleCenterX（内部已处理镜像），
-     *     不能自己算 sizePx/2。
-     *  ② 气泡窗口中心 ≠ 椭圆可见中心：视图 1026 宽里椭圆只占 x 72..836（含描边），
-     *     可见中心在 44.25%，右边 20% 是空边。按 50% 摆就永远偏左。
-     *     inkCx 由气泡自己给（镜像后为 1-0.4425）。
+     * 为什么锚这个、而不是椭圆中心（0.4425）：椭圆的中心跟"她"没有物理联系，
+     * 尾巴才是"指向她"的那一笔。把尾巴柱对准她的盒子中心，气泡才像从她头顶长出来的。
+     */
+    private val TAIL_COL_CX = 390.5f / 1026f
+
+    /**
+     * 把气泡摆到宠物头顶，**几何完全固定**：
+     *   水平：尾巴那一列对准她的盒子中心（不看镜像、不量墨迹 → 翻面/换动作都不横向跳）
+     *   垂直：尾巴尖永远在她头顶上方 6dp
+     *   尺寸：只由宠物大小决定（不随"头顶还剩多少空间"缩放 → 拖动时不会忽大忽小）
      *
-     * tipRatio：气泡底边（尾巴尖）在窗口高度里的比例 —— 让「尾巴尖」而不是整个窗口顶着头顶。
+     * 唯一会偏离的情况：她贴死屏幕最上面/最右边，气泡被夹进安全区 ——
+     * 宁可夹住，也不翻到脚底、也不改尺寸。
      */
     private fun placeBubble(
         lp: WindowManager.LayoutParams,
         bw: Int,
         bh: Int,
         pet: Pet,
-        inkCx: Float = 0.5f,
+        anchorCx: Float = TAIL_COL_CX,
         tipRatio: Float = 1f,
     ) {
         if (bw <= 0 || bh <= 0) return
         val dm = resources.displayMetrics
         val d = dm.density
         val pad = (8 * d).toInt()
-        var bx = (pet.visibleCenterX - inkCx * bw).toInt()
-        val maxX = dm.widthPixels - bw - pad
-        bx = bx.coerceIn(pad, maxX.coerceAtLeast(pad))
-        // 相对位置固定：尾巴尖永远在她头顶上方 6dp，**永不翻到脚底**。
-        // 头顶顶到安全区时就把气泡夹在安全区里（尾巴会压一点点她头顶）——
-        // 这也比「气泡跑到下面、看着跟她没关系」好。
+        // 她翻面时气泡也跟着翻（整对一起转），尾巴那一列换到对称位置：
+        // 不补偿的话，镜像会让尾巴横跳 0.24×bw ≈ 160px，正是"脱节"的来源。
+        val a = if (pet.mirrored) 1f - anchorCx else anchorCx
+        var bx = (pet.boxCenterX - a * bw).toInt()
+        // 允许最多 12% 出屏（FLAG_LAYOUT_NO_LIMITS 已开）：
+        // 气泡比手机宽度窄不了多少，她贴着左右边时不出屏就必然被"推离"她的头，
+        // 那一小段正好是椭圆的空白边，所以看起来还是完整的一整块。
+        val slack = (bw * 0.12f).toInt()
+        val minX = pad - slack
+        val maxX = dm.widthPixels - bw - pad + slack
+        bx = bx.coerceIn(minX, maxX.coerceAtLeast(minX))
         val gap = (6 * d).toInt()
         var by = pet.y.toInt() - (bh * tipRatio).toInt() - gap
         if (by < topInsetPx()) by = topInsetPx()
