@@ -116,6 +116,32 @@ object BtbuParse {
         )
     }
 
+    /**
+     * 从学期列表里挑出「当前学年学期」的开始日期，返回 epochDay（本地时区的日期）。
+     * 找不到就返回 null（调用方退回锚点算法）。
+     */
+    fun termStartDay(j: JSONObject, xn: String, xq: Int): Long? {
+        val arr = j.optJSONArray("xnXqList") ?: return null
+        var bestMs = 0L
+        var bestMatch = false
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val ms = o.optLong("startTime", 0L)
+            if (ms <= 0L) continue
+            val same = o.optString("xn") == xn && o.optInt("xq") == xq
+            if (same) return msToEpochDay(ms)
+            // 兜底：取"最近的、已经开始的那个学期"
+            if (ms > bestMs && ms <= System.currentTimeMillis() + 7L * 24 * 3600 * 1000) {
+                bestMs = ms
+                bestMatch = true
+            }
+        }
+        return if (bestMatch) msToEpochDay(bestMs) else null
+    }
+
+    private fun msToEpochDay(ms: Long): Long =
+        java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toEpochDay()
+
     /** "8:00" → "08:00"；服务端给的是单位数小时 */
     private fun hhmm(s: String): String {
         val p = s.split(":")

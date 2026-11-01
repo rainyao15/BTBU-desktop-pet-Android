@@ -23,6 +23,7 @@ object Tron {
     const val PFX_JW = "jwCampus/"                      // 教务（课表）
     const val PFX_INFO = "infoCampus/"                  // 网费 / 一卡通
     const val PFX_IFACE = "interface/rest/http/"        // 学校自研接口（jf/getNetUser.htm）
+    const val PFX_OA = "oaCampus/"                      // 学期/学年（sc/getXnXq.do）
 
     /**
      * 信封：

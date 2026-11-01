@@ -441,9 +441,15 @@ class MainActivity : Activity() {
                 accStatus.text = "登录成功（$name），正在拉数据…"
                 BtbuSync.refreshAsync(this) { ok ->
                     renderBtbuStatus()
+                    val week = try {
+                        BtbuSync.state(this).week
+                    } catch (t: Throwable) {
+                        0
+                    }
                     Toast.makeText(
                         this,
-                        if (ok) "同步完成" else "同步失败：${BtbuSync.lastError ?: "未知"}",
+                        if (!ok) "同步失败：${BtbuSync.lastError ?: "未知"}"
+                        else if (week > 0) "同步完成 · 现在是第 $week 周" else "同步完成",
                         Toast.LENGTH_SHORT,
                     ).show()
                 }

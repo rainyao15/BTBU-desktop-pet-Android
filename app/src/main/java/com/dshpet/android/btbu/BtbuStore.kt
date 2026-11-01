@@ -125,7 +125,29 @@ class BtbuStore(ctx: Context) {
         runCatching {
             val s = BtbuApi.schedule(tok)
             saveSchedule(s, System.currentTimeMillis()); any = true
+            // 顺手把「本学期第 1 周从哪天开始」也拿下来 —— 这是周次最靠谱的来源
+            runCatching { BtbuApi.termStart(tok, s.xn, s.xq) }
+                .getOrNull()
+                ?.let { day ->
+                    val old = sp.getLong("termStartDay", 0L)
+                    sp.edit().apply {
+                        putLong("termStartDay", day)
+                        if (old != 0L && old != day) putInt("weekOffset", 0)
+                    }.apply()
+                    android.util.Log.i("BtbuStore", "学期开始日 epochDay=$day")
+                }
         }.onFailure { android.util.Log.w("BtbuStore", "课表失败 ${it.message}") }
+
+        // 就算课表接口挂了，也把学期开始日拿到（周次不依赖课表）
+        runCatching {
+            val day = BtbuApi.termStart(tok, "", -1) ?: return@runCatching
+            val old = sp.getLong("termStartDay", 0L)
+            sp.edit().apply {
+                putLong("termStartDay", day)
+                // 换学期了 → 之前手动校正的偏移作废
+                if (old != 0L && old != day) putInt("weekOffset", 0)
+            }.apply()
+        }.onFailure { android.util.Log.w("BtbuStore", "学期开始日失败 ${it.message}") }
 
         runCatching { BtbuApi.net(tok)?.let { saveNet(it); any = true } }
             .onFailure { android.util.Log.w("BtbuStore", "网费失败 ${it.message}") }
@@ -251,18 +273,27 @@ class BtbuStore(ctx: Context) {
      */
     private fun weekNow(): Int {
         val total = sp.getInt("totalWeek", 25).coerceAtLeast(1)
+        val offset = sp.getInt("weekOffset", 0)
         val base = sp.getInt("curWeek", 1).coerceIn(1, total)
+
+        // ① 最靠谱：学期开始日期（开学第 1 周的周一）→ 第 N 周 = (今天 - 开学)/7 + 1
+        val termStart = sp.getLong("termStartDay", 0L)
+        if (termStart != 0L) {
+            val days = java.time.LocalDate.now().toEpochDay() - termStart
+            if (days >= 0) return ((days / 7).toInt() + 1 + offset).coerceIn(1, total)
+        }
+
         val anchor = sp.getLong("weekAnchorDay", 0L)
         if (anchor != 0L) {
             val todayMonday = mondayEpochDay(java.time.LocalDate.now())
             val weeks = ((todayMonday - anchor) / 7L).toInt()
-            return (base + weeks).coerceIn(1, total)
+            return (base + weeks + offset).coerceIn(1, total)
         }
         // 老缓存（升级上来的）：退回旧递推，等下次同步就会写上锚点
         val at = sp.getLong("scheduleAt", 0L)
-        if (at == 0L) return base
+        if (at == 0L) return (base + offset).coerceIn(1, total)
         val weeks = ((System.currentTimeMillis() - at) / (7L * 24 * 3600 * 1000)).toInt()
-        return (base + weeks).coerceIn(1, total)
+        return (base + weeks + offset).coerceIn(1, total)
     }
 
     /** 某个日期所在周的周一（epochDay） */
@@ -275,14 +306,11 @@ class BtbuStore(ctx: Context) {
      */
     fun shiftWeek(delta: Int) {
         val total = sp.getInt("totalWeek", 25).coerceAtLeast(1)
-        val w = (weekNow() + delta).coerceIn(1, total)
-        val today = java.time.LocalDate.now()
-        val monday = today.minusDays((today.dayOfWeek.value - 1).toLong())
-        sp.edit()
-            .putInt("curWeek", w)
-            .putLong("weekAnchorDay", monday.toEpochDay())
-            .putLong("weekAnchorAt", System.currentTimeMillis())
-            .apply()
+        val cur = weekNow()
+        val target = (cur + delta).coerceIn(1, total)
+        if (target == cur) return
+        val off = sp.getInt("weekOffset", 0) + delta
+        sp.edit().putInt("weekOffset", off).apply()
     }
 
     /** 自检用：周次是怎么算出来的 */
@@ -293,9 +321,14 @@ class BtbuStore(ctx: Context) {
         val anchor = sp.getLong("weekAnchorDay", 0L)
         val anchorTxt = if (anchor == 0L) "无锚点(老缓存)"
         else java.time.LocalDate.ofEpochDay(anchor).toString() + "(周一)"
-        val termStart = if (anchor == 0L) "--"
-        else java.time.LocalDate.ofEpochDay(anchor - (base - 1) * 7L).toString()
-        return "第 ${weekNow()}/${total} 周 · 采用 curWeek=$base（服务器原值 $raw）· 锚点=$anchorTxt · 推算学期首周周一=$termStart"
+        val termStartDay = sp.getLong("termStartDay", 0L)
+        val offset = sp.getInt("weekOffset", 0)
+        val src = if (termStartDay != 0L) "学期开始日" else if (anchor != 0L) "同步锚点" else "老缓存"
+        val startTxt = if (termStartDay != 0L) java.time.LocalDate.ofEpochDay(termStartDay).toString()
+        else if (anchor != 0L) java.time.LocalDate.ofEpochDay(anchor - (base - 1) * 7L).toString()
+        else "--"
+        return "第 ${weekNow()}/${total} 周（来源：$src）· 开学首周周一=$startTxt · " +
+            "服务器 curWeek=$raw · 校正偏移=${if (offset >= 0) "+$offset" else "$offset"} · 锚点=$anchorTxt"
     }
 
     private fun readCourses(): List<Course> {

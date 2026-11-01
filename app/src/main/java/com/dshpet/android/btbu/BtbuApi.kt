@@ -62,6 +62,19 @@ object BtbuApi {
         return BtbuParse.schedule(j, lessons)
     }
 
+    /**
+     * 学期开始日期（**周次的权威来源**）。
+     *
+     * `oaCampus/sc/getXnXq.do` 返回 xnxqList[]，每条有 xn / xq / startTime（毫秒）。
+     * 实测 2026-2027 第 1 学期 startTime = 1788710400000 = 北京时间 2026-09-07 00:00（周一）。
+     * 拿它算周次比信 curWeek 靠谱：curWeek 会回 0、会被脏数据改写，学期开始日期不会。
+     */
+    fun termStart(token: String, xn: String, xq: Int): Long? {
+        val j = Tron.post(Tron.PFX_OA + "sc/getXnXq.do", JSONObject(), token)
+        if (!Tron.ok(j)) return null
+        return BtbuParse.termStartDay(j, xn, xq)
+    }
+
     fun net(token: String): NetInfo? {
         val j = Tron.post(Tron.PFX_IFACE + "jf/getNetUser.htm", JSONObject(), token)
         return if (Tron.ok(j)) BtbuParse.net(j) else null
