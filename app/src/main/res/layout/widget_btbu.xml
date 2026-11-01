@@ -39,7 +39,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="网 --  卡 --"
+        android:text="网费 -- · 校园卡 --"
         android:textColor="#6BE3B0"
         android:textSize="14sp" />
 

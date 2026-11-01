@@ -501,7 +501,11 @@ class MainActivity : Activity() {
                 val min = ((System.currentTimeMillis() - st.syncedAt) / 60_000L).toInt()
                 "第${st.week}周 · ${st.balanceLine()} · 同步于 " +
                     (if (min < 1) "刚刚" else "${min}分钟前") +
-                    "\n" + st.nextLine()
+                    "\n" + st.nextLine() +
+                    // 周次到底怎么算出来的（第 N 周对不上时，这一行直接能看出问题）
+                    "\n" + runCatching {
+                        com.dshpet.android.btbu.BtbuStore(this).weekInfo()
+                    }.getOrDefault("")
             }
         }
     }

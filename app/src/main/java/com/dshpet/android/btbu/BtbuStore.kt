@@ -33,11 +33,47 @@ class BtbuStore(ctx: Context) {
         val todayCount: Int,
     ) {
         val hasData get() = syncedAt > 0
-        /** 供 HUD 一行显示，例如 "网 15.00 | 卡 25.80" */
+
+        /** 今天有没有课（周次位图已经过滤过） */
+        val todayHasClass get() = todayCount > 0
+
+        /** 一行显示余额（挂件/通知栏/小卡用）：**不再写"网 15.00 卡 25.80"**，字样给全 */
         fun balanceLine(): String {
             val n = net?.let { "%.2f".format(it.mainBalance) } ?: "--"
             val c = card?.let { "%.2f".format(it.balanceYuan) } ?: "--"
-            return "网 $n  卡 $c"
+            return "网费 $n · 校园卡 $c"
+        }
+
+        /** 校园卡余额（气泡大字） */
+        fun cardMain(): String = card?.let { "%.2f 元".format(it.balanceYuan) } ?: "--"
+
+        /** 网费余额（气泡大字） */
+        fun netMain(): String = net?.let { "%.2f 元".format(it.mainBalance) } ?: "--"
+
+        /** 网费副行：本月流量 */
+        fun netDetail(): String = net?.let {
+            "本月 ${it.flowMonth.ifEmpty { "--" }} / ${it.flowTotal.ifEmpty { "--" }}"
+        } ?: "还没同步"
+
+        /** 一节/一段课：第 8 节 / 第 8-10 节 */
+        fun rangeOf(c: Course): String =
+            if (c.jcTo > c.jcFrom) "第 ${c.jcFrom}-${c.jcTo} 节" else "第 ${c.jcFrom} 节"
+
+        /** 气泡「下一节课」页：大字＝几点上课（正在上则显示几点下课） */
+        fun classMain(): String = when {
+            current != null -> "下课 ${current.end}"
+            next != null -> next.start
+            else -> "没课"
+        }
+
+        /** 气泡「下一节课」页：副行＝哪天/课名/第几节/在哪上 */
+        fun classDetail(): String = when {
+            current != null -> "${current.name} · ${rangeOf(current)} · ${current.room}"
+            next != null -> {
+                val d = if (nextInDays == 0) "今天" else BtbuStore.wdName(next.weekday)
+                "$d ${next.name} · ${rangeOf(next)} · ${next.room}"
+            }
+            else -> "最近没课 摸鱼"
         }
         /** 供 HUD 显示下一节课，例如 "周一 15:30 模拟电子技术 @工2-203-2" */
         fun nextLine(): String = when {
@@ -46,7 +82,7 @@ class BtbuStore(ctx: Context) {
                 val d = if (nextInDays == 0) "今天" else BtbuStore.wdName(next.weekday)
                 "$d ${next.start} ${next.name} @${next.room}"
             }
-            else -> "最近没课，摸鱼"
+            else -> "最近没课 摸鱼"
         }
 
         /** 标题行，例如 "北工商 · 第 8 周" */
@@ -110,11 +146,19 @@ class BtbuStore(ctx: Context) {
                 put("start", it.start); put("end", it.end); put("weeks", it.weeks)
             })
         }
+        // 周次锚点：把"服务器说的第几周"钉死在**同步当周周一**上。
+        // 以后算周次不再用"距上次同步过了几个 7 天"（那会在跨周那两天错一周，
+        // 第 1 周开学时最明显），而是"今天周一 - 锚点周一"。
+        val today = java.time.LocalDate.now()
+        val monday = today.minusDays((today.dayOfWeek.value - 1).toLong())
         sp.edit()
             .putString("courses", arr.toString())
+            .putLong("weekAnchorDay", monday.toEpochDay())
+            .putLong("weekAnchorAt", at)
             .putString("lessons", JSONObject(s.lessons.mapValues { listOf(it.value.first, it.value.second) }).toString())
             .putString("term", "${s.xn}-${s.xq}|${s.describe}")
-            .putInt("curWeek", s.curWeek).putInt("totalWeek", s.totalWeek)
+            .putInt("curWeek", s.curWeek.coerceAtLeast(1))
+            .putInt("totalWeek", s.totalWeek.coerceAtLeast(1))
             .putLong("scheduleAt", at)
             .apply()
     }
@@ -178,14 +222,46 @@ class BtbuStore(ctx: Context) {
         )
     }
 
-    /** 复刻 normalize.py 的周次递推：curWeek + 经过的自然周 */
+    /**
+     * 当前教学周。
+     *
+     * 老算法：curWeek + (距上次同步的 7 天整数个) —— 同步发生在周三、周一再看就会少算一周，
+     * 学期第 1 周尤其明显（"第 1 周时间对不上"就是这个）。
+     *
+     * 新算法：同步时把 curWeek 钉在**那一周的周一**（weekAnchorDay），之后
+     *   当前周 = curWeek + (今天所在周的周一 - 锚点周一) / 7
+     * 只跟"星期几"有关，跟"几点同步的、隔了几天"无关，所以跨周、跨月、离线几个月都不会漂。
+     */
     private fun weekNow(): Int {
-        val base = sp.getInt("curWeek", 1)
+        val total = sp.getInt("totalWeek", 25).coerceAtLeast(1)
+        val base = sp.getInt("curWeek", 1).coerceIn(1, total)
+        val anchor = sp.getLong("weekAnchorDay", 0L)
+        if (anchor != 0L) {
+            val todayMonday = mondayEpochDay(java.time.LocalDate.now())
+            val weeks = ((todayMonday - anchor) / 7L).toInt()
+            return (base + weeks).coerceIn(1, total)
+        }
+        // 老缓存（升级上来的）：退回旧递推，等下次同步就会写上锚点
         val at = sp.getLong("scheduleAt", 0L)
         if (at == 0L) return base
         val weeks = ((System.currentTimeMillis() - at) / (7L * 24 * 3600 * 1000)).toInt()
-        val total = sp.getInt("totalWeek", 25)
         return (base + weeks).coerceIn(1, total)
+    }
+
+    /** 某个日期所在周的周一（epochDay） */
+    private fun mondayEpochDay(d: java.time.LocalDate): Long =
+        d.toEpochDay() - (d.dayOfWeek.value - 1).toLong()
+
+    /** 自检用：周次是怎么算出来的 */
+    fun weekInfo(): String {
+        val total = sp.getInt("totalWeek", 25)
+        val base = sp.getInt("curWeek", 1)
+        val anchor = sp.getLong("weekAnchorDay", 0L)
+        val anchorTxt = if (anchor == 0L) "无锚点(老缓存)"
+        else java.time.LocalDate.ofEpochDay(anchor).toString() + "(周一)"
+        val termStart = if (anchor == 0L) "--"
+        else java.time.LocalDate.ofEpochDay(anchor - (base - 1) * 7L).toString()
+        return "第 ${weekNow()}/${total} 周 · 服务器 curWeek=$base · 锚点=$anchorTxt · 推算学期首周周一=$termStart"
     }
 
     private fun readCourses(): List<Course> {

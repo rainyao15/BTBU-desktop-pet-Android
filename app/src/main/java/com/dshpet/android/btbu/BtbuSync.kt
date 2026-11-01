@@ -60,7 +60,19 @@ object BtbuSync {
                 false
             }
             syncing = false
-            if (ok) BtbuWidgetProvider.refresh(app)     // 数据变了，顺手刷桌面挂件
+            if (ok) {
+                BtbuWidgetProvider.refresh(app)         // 数据变了，顺手刷桌面挂件
+                // 把「周次是怎么算出来的」记进诊断：第 N 周对不上时，这一行直接说明问题
+                try {
+                    com.dshpet.android.Diag.record(app, "同步完成 · " + store(app).weekInfo())
+                } catch (_: Throwable) {
+                }
+                // 让头顶气泡/通知栏立刻反映新数据（以前要等下一次 60 秒检查）
+                try {
+                    com.dshpet.android.PetService.dataChanged(app)
+                } catch (_: Throwable) {
+                }
+            }
             main.post { onDone?.invoke(ok) }
         }
     }

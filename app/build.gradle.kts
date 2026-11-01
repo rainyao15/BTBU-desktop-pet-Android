@@ -11,8 +11,8 @@ android {
         applicationId = "com.dshpet.android"
         minSdk = 28
         targetSdk = 34
-        versionCode = 38
-        versionName = "1.9.18-btbu"
+        versionCode = 39
+        versionName = "1.9.19-btbu"
     }
 
     // 固定签名：CI 每次都用同一个 keystore，这样后续版本能直接覆盖安装

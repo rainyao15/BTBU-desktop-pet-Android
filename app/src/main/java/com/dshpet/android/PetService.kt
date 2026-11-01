@@ -60,8 +60,12 @@ class PetService : Service() {
         const val ACTION_RELOAD = "com.dshpet.android.action.RELOAD"
         const val ACTION_LINES = "com.dshpet.android.action.LINES"
         const val ACTION_SYNC = "com.dshpet.android.action.SYNC"
+        /** 数据已经拉好了（别的地方同步完）：只刷气泡/通知，不再请求一次 */
+        const val ACTION_DATA = "com.dshpet.android.action.DATA"
         /** 一句台词在气泡里停留多久 */
         private const val SPEECH_MS = 3600L
+        /** 气泡翻页后多久自动回到默认页（毫秒） */
+        private const val PAGE_RESET_MS = 30_000L
         /** 空闲时的慢拍（毫秒）：没有东西在动就不要每帧醒 */
         private const val IDLE_TICK_MS = 66L
         /** 单帧最多按多少毫秒算（切后台/卡顿回来时别让物理瞬移） */
@@ -78,6 +82,16 @@ class PetService : Service() {
 
         fun reload(ctx: Context) {
             ctx.startService(Intent(ctx, PetService::class.java).setAction(ACTION_RELOAD))
+        }
+
+        /** 数据变了（别处同步完成）：立刻刷气泡和通知栏，不再拉一次网 */
+        fun dataChanged(ctx: Context) {
+            if (!Prefs.running(ctx)) return
+            try {
+                ctx.startService(Intent(ctx, PetService::class.java).setAction(ACTION_DATA))
+            } catch (t: Throwable) {
+                Diag.record(ctx, "数据刷新通知失败", t)
+            }
         }
 
         /** 台词被改了：宠物立刻换用新台词，并当场说一句（宠物没在跑就什么都不做） */
@@ -181,6 +195,10 @@ class PetService : Service() {
                     }
                     teardown()
                     spawnAll(Prefs.sizeDp(this))
+                }
+                ACTION_DATA -> {
+                    updateDataBubble(true)
+                    updateNotification()
                 }
                 ACTION_SYNC -> {
                     try {
@@ -365,6 +383,11 @@ class PetService : Service() {
                             w.updateViewLayout(v, p)
                         } catch (_: Throwable) {
                         }
+                        // 气泡和宠物必须在同一帧里挪，否则拖动时气泡总慢半拍，看着像两块不相干的东西
+                        try {
+                            followDataBubble()
+                        } catch (_: Throwable) {
+                        }
                     }
                 }
                 pet.applyScale(sizeDp)
@@ -545,15 +568,27 @@ class PetService : Service() {
             )
             bind(head, main, sub)
             bindCountdown(chip, timer)
+            // 点一下 = 翻页（工作日：下一节课 → 校园卡 → 网费 → 下一节课；周末：网费 ↔ 校园卡）
             setOnClickListener {
                 if (isSpeaking()) return@setOnClickListener
+                try {
+                    cycleBubblePage()
+                } catch (t: Throwable) {
+                    Diag.record(this@PetService, "气泡翻页失败", t)
+                }
+            }
+            // 长按 = 打开整周课表（以前是单击，现在让位给翻页）
+            setOnLongClickListener {
+                if (isSpeaking()) return@setOnLongClickListener false
                 try {
                     startActivity(
                         Intent(this@PetService, com.dshpet.android.btbu.ScheduleActivity::class.java)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     )
+                    true
                 } catch (t: Throwable) {
                     Diag.record(this@PetService, "打开课表失败", t)
+                    false
                 }
             }
         }
@@ -625,6 +660,65 @@ class PetService : Service() {
      * 内容层：按当前模式（数据 / 台词）把三行文字和倒计时药丸写好。
      * **只改内容，不碰窗口尺寸** —— 尺寸和位置统一由 [relayoutBubble] 管。
      */
+    /** 气泡当前显示哪一页 */
+    private enum class BubblePage { NEXT, CARD, NET }
+
+    private var bubblePage = BubblePage.NEXT
+    private var bubblePageAtMs = 0L
+
+    /**
+     * 工作日 / 周末模式：
+     *  · 周六、周日 → 周末模式（默认显示网费，点一下切校园卡）
+     *  · 周一~周五但"今天一节没课" → 也算周末模式（那天她真的没事干）
+     *  · 周日 18:00 之后 → 切回工作日模式（明天要上课了）
+     */
+    private fun workdayMode(st: com.dshpet.android.btbu.BtbuStore.HudState?, now: java.time.LocalDateTime): Boolean {
+        val wd = now.dayOfWeek.value
+        if (wd == 7) return now.hour >= 18
+        if (wd == 6) return false
+        return st?.todayHasClass ?: false
+    }
+
+    /** 当前页：模式变了 / 停留超过 30 秒 → 回默认页 */
+    private fun currentPage(workday: Boolean): BubblePage {
+        val def = if (workday) BubblePage.NEXT else BubblePage.NET
+        val stale = SystemClock.uptimeMillis() - bubblePageAtMs > PAGE_RESET_MS
+        if (stale && bubblePage != def) {
+            bubblePage = def
+            bubblePageAtMs = SystemClock.uptimeMillis()
+        }
+        val valid = if (workday) {
+            bubblePage == BubblePage.NEXT || bubblePage == BubblePage.CARD || bubblePage == BubblePage.NET
+        } else {
+            bubblePage == BubblePage.CARD || bubblePage == BubblePage.NET
+        }
+        if (!valid) bubblePage = def
+        return bubblePage
+    }
+
+    /** 点一下气泡：在工作日/周末模式里循环 */
+    private fun cycleBubblePage() {
+        val st = try {
+            com.dshpet.android.btbu.BtbuSync.state(this)
+        } catch (t: Throwable) {
+            null
+        }
+        val workday = workdayMode(st, java.time.LocalDateTime.now())
+        bubblePage = if (workday) {
+            when (bubblePage) {
+                BubblePage.NEXT -> BubblePage.CARD
+                BubblePage.CARD -> BubblePage.NET
+                BubblePage.NET -> BubblePage.NEXT
+            }
+        } else {
+            // 周末只有两页：网费 ↔ 校园卡
+            if (bubblePage == BubblePage.CARD) BubblePage.NET else BubblePage.CARD
+        }
+        bubblePageAtMs = SystemClock.uptimeMillis()
+        applyBubbleContent(true)
+        relayoutBubble()
+    }
+
     private fun applyBubbleContent(force: Boolean = false) {
         val head = dbHead ?: return
         val main = dbTitle ?: return
@@ -656,40 +750,58 @@ class PetService : Service() {
         } catch (t: Throwable) {
             null
         }
-        val hasData = st != null && st.hasData
+        if (st == null || !st.hasData) {
+            head.text = "北工商桌宠"
+            main.text = "未登录"
+            sub.text = "点这里填学号密码"
+            pill?.visibility = View.GONE
+            dbTimer?.stop()
+            dbSig = "empty"
+            return
+        }
 
-        // 倒计时是秒级变化的，不能进 sig 去重 —— 每次进来都重新上弦
-        if (hasData) {
-            head.text = st.headLine()
-            val remain = st.countdownRemainMs()
-            if (remain != null && remain > 0) {
-                pill?.visibility = View.VISIBLE
-                dbTimer?.let { t ->
-                    t.format = if (st.current != null) "距下课  %s" else "距上课  %s"
-                    t.base = android.os.SystemClock.elapsedRealtime() + remain
-                    t.isCountDown = true
-                    t.start()
-                }
-            } else {
-                pill?.visibility = View.GONE
-                dbTimer?.stop()
+        val now = java.time.LocalDateTime.now()
+        val workday = workdayMode(st, now)
+        val page = currentPage(workday)
+        val noClassLine = "最近没课 摸鱼"
+
+        when (page) {
+            BubblePage.NEXT -> {
+                head.text = st.headLine()          // 北工商 · 第 N 周
+                main.text = st.classMain()         // 大字：几点上课 / 正在上则几点下课
+                sub.text = st.classDetail()        // 哪天 + 课名 + 第几节 + 教室
+            }
+            BubblePage.CARD -> {
+                head.text = "校园卡余额"
+                main.text = st.cardMain()
+                sub.text = if (workday) "点一下看网费" else noClassLine
+            }
+            BubblePage.NET -> {
+                head.text = "网费余额"
+                main.text = st.netMain()
+                sub.text = if (workday) "点一下回到下一节课" else noClassLine
+            }
+        }
+
+        // 倒计时药丸只在「下一节课」页有意义
+        val remain = if (page == BubblePage.NEXT) st.countdownRemainMs() else null
+        if (remain != null && remain > 0) {
+            pill?.visibility = View.VISIBLE
+            dbTimer?.let { t ->
+                t.format = if (st.current != null) "距下课  %s" else "距上课  %s"
+                t.base = android.os.SystemClock.elapsedRealtime() + remain
+                t.isCountDown = true
+                t.start()
             }
         } else {
-            head.text = "北工商桌宠"
             pill?.visibility = View.GONE
             dbTimer?.stop()
         }
 
-        val sig = if (hasData) {
-            st.week.toString() + "|" + st.balanceLine() + "|" + st.nextLine()
-        } else {
-            "empty"
-        }
+        val sig = st.week.toString() + "|" + page.name + "|" + st.balanceLine() + "|" +
+            st.classMain() + "|" + st.classDetail()
         if (!force && sig == dbSig) return
         dbSig = sig
-        // 大数字拆成两行（"网 15.00" / "卡 25.80"）：一行 15 个字塞进椭圆必然被压到 9px
-        main.text = if (hasData) st.balanceLine().replace("  ", "\n") else "未登录"
-        sub.text = if (hasData) st.nextLine() else "点气泡填学号"
     }
 
     /** 按内容重新量一次尺寸 + 摆放 + 提交（气泡只有一个窗口，尺寸会随台词/数据变化） */
@@ -1201,6 +1313,18 @@ class PetService : Service() {
             followDataBubble()
         } catch (t: Throwable) {
             Diag.record(this@PetService, "followDataBubble 异常", t)
+        }
+        // 手动翻过页的话，30 秒没再点就自己回到默认页（下一节课 / 网费）
+        if (bubblePageAtMs != 0L && !isSpeaking() &&
+            SystemClock.uptimeMillis() - bubblePageAtMs > PAGE_RESET_MS
+        ) {
+            bubblePageAtMs = 0L
+            try {
+                applyBubbleContent(true)
+                relayoutBubble()
+            } catch (t: Throwable) {
+                Diag.record(this@PetService, "气泡回默认页异常", t)
+            }
         }
         val n = SystemClock.uptimeMillis()
         if (n - lastSpeechCheck > 1000L) {
