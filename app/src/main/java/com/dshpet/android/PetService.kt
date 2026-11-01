@@ -31,6 +31,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import java.util.Calendar
+import kotlin.math.abs
 import kotlin.random.Random
 import com.dshpet.android.btbu.BtbuAlerts
 import com.dshpet.android.btbu.BtbuHud
@@ -108,7 +109,7 @@ class PetService : Service() {
     private var lastBtbuCheck = 0L
 
     // ---- 常驻数据气泡（贴在宠物头顶，显示余额 + 下一节课）----
-    private var dbRoot: View? = null
+    private var dbRoot: com.dshpet.android.btbu.ThoughtBubble? = null
     private var dbParams: WindowManager.LayoutParams? = null
     private var dbPet: Pet? = null
     private var dbTitle: TextView? = null
@@ -547,7 +548,7 @@ class PetService : Service() {
             }
         }
 
-        val bw = bubbleWidthPx(pet)
+        val bw = fittedDataBubbleWidth(pet)
         box.measure(
             View.MeasureSpec.makeMeasureSpec(bw, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
@@ -561,7 +562,8 @@ class PetService : Service() {
             PixelFormat.TRANSLUCENT,
         )
         lp.gravity = Gravity.TOP or Gravity.START
-        placeBubble(lp, bw, bh, pet)
+        box.mirrorBubble = pet.mirrored
+        placeBubble(lp, bw, bh, pet, box.inkCenterX, com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP)
         try {
             w.addView(box, lp)
             dbRoot = box
@@ -582,6 +584,31 @@ class PetService : Service() {
         val screenW = resources.displayMetrics.widthPixels
         val want = (pet.sizePx * 1.75f).toInt()
         return minOf(want, (screenW * 0.62f).toInt()).coerceAtLeast(dpPx(220))
+    }
+
+    /** 状态栏/顶部安全区：气泡不允许越过这条线 */
+    private fun topInsetPx(): Int = dpPx(28)
+
+    /** 气泡「尾巴尖高度 / 气泡宽度」：700/1026 × 673/700 ≈ 0.656 */
+    private val bubbleTipPerWidth =
+        (700f / 1026f) * com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP
+
+    /**
+     * 按「头顶还剩多少地方」算气泡宽度 —— 气泡和宠物的相对位置要固定，
+     * 所以宁可让气泡变小，也不把它翻到宠物下面去。
+     *
+     * 三段行为（她默认在右下，头顶空间充足 → 满尺寸）：
+     *  · 头顶够 → 满尺寸；
+     *  · 头顶不够 → 等比缩小，最小到 62%（再小字就看不清了）；
+     *  · 贴死顶部 → 用最小尺寸 + 尾巴对不上也只在安全区夹住，永不翻到脚底。
+     */
+    private fun fittedDataBubbleWidth(pet: Pet): Int {
+        val want = bubbleWidthPx(pet)
+        val minW = (want * 0.62f).toInt()
+        val room = pet.y.toInt() - dpPx(6) - topInsetPx()
+        if (room <= 0) return minW
+        val maxW = (room / bubbleTipPerWidth).toInt()
+        return maxOf(minW, minOf(want, maxW))
     }
 
     private fun updateDataBubble(force: Boolean = false) {
@@ -628,7 +655,7 @@ class PetService : Service() {
         val box = dbRoot ?: return
         val pet = dbPet ?: return
         val lp = dbParams ?: return
-        val bw = bubbleWidthPx(pet)
+        val bw = fittedDataBubbleWidth(pet)
         box.measure(
             View.MeasureSpec.makeMeasureSpec(bw, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
@@ -636,7 +663,8 @@ class PetService : Service() {
         val bh = box.measuredHeight.coerceAtLeast(dpPx(40))
         lp.width = bw
         lp.height = bh
-        placeBubble(lp, bw, bh, pet)
+        box.mirrorBubble = pet.mirrored
+        placeBubble(lp, bw, bh, pet, box.inkCenterX, com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP)
         try {
             wm?.updateViewLayout(box, lp)
         } catch (_: Throwable) {
@@ -649,8 +677,22 @@ class PetService : Service() {
         val pet = dbPet ?: return
         val oldX = lp.x
         val oldY = lp.y
-        placeBubble(lp, box.measuredWidth, box.measuredHeight, pet)
-        if (lp.x == oldX && lp.y == oldY) return
+        val oldW = lp.width
+        val oldH = lp.height
+        // 头顶剩多少地方决定气泡多大：变了就重排一次。
+        // 量化到 8dp 台阶，否则拖动时每帧都要 measure（ThoughtBubble 里还有 3 轮缩字迭代）。
+        val fitted = fittedDataBubbleWidth(pet)
+        if (abs(fitted - lp.width) >= dpPx(8)) {
+            box.measure(
+                View.MeasureSpec.makeMeasureSpec(fitted, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            )
+            lp.width = fitted
+            lp.height = box.measuredHeight.coerceAtLeast(dpPx(40))
+        }
+        box.mirrorBubble = pet.mirrored
+        placeBubble(lp, box.measuredWidth, box.measuredHeight, pet, box.inkCenterX, com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP)
+        if (lp.x == oldX && lp.y == oldY && lp.width == oldW && lp.height == oldH) return
         try {
             wm?.updateViewLayout(box, lp)
         } catch (_: Throwable) {
@@ -771,19 +813,40 @@ class PetService : Service() {
         }
     }
 
-    private fun placeBubble(lp: WindowManager.LayoutParams, bw: Int, bh: Int, pet: Pet) {
+    /**
+     * 把气泡窗口摆到宠物「看得见的那半个身子」的正上方。
+     *
+     * 两个错位源（以前就是它们让气泡看着不对齐）：
+     *  ① 宠物盒中心 ≠ 立绘可见中心：素材四周留白不对称，墨迹中心实测 0.536，
+     *     镜像后变 0.464 —— 所以必须问 Pet.visibleCenterX（内部已处理镜像），
+     *     不能自己算 sizePx/2。
+     *  ② 气泡窗口中心 ≠ 椭圆可见中心：视图 1026 宽里椭圆只占 x 72..836（含描边），
+     *     可见中心在 44.25%，右边 20% 是空边。按 50% 摆就永远偏左。
+     *     inkCx 由气泡自己给（镜像后为 1-0.4425）。
+     *
+     * tipRatio：气泡底边（尾巴尖）在窗口高度里的比例 —— 让「尾巴尖」而不是整个窗口顶着头顶。
+     */
+    private fun placeBubble(
+        lp: WindowManager.LayoutParams,
+        bw: Int,
+        bh: Int,
+        pet: Pet,
+        inkCx: Float = 0.5f,
+        tipRatio: Float = 1f,
+    ) {
         if (bw <= 0 || bh <= 0) return
         val dm = resources.displayMetrics
         val d = dm.density
         val pad = (8 * d).toInt()
-        var bx = pet.windowLeftPx + pet.sizePx / 2 - bw / 2
+        var bx = (pet.visibleCenterX - inkCx * bw).toInt()
         val maxX = dm.widthPixels - bw - pad
         bx = bx.coerceIn(pad, maxX.coerceAtLeast(pad))
-        var by = pet.y.toInt() - bh - (6 * d).toInt()
-        if (by < (28 * d).toInt()) {
-            // 头顶放不下（宠物在屏幕最上面）就放到脚下
-            by = pet.y.toInt() + pet.heightPx + (6 * d).toInt()
-        }
+        // 相对位置固定：尾巴尖永远在她头顶上方 6dp，**永不翻到脚底**。
+        // 头顶顶到安全区时就把气泡夹在安全区里（尾巴会压一点点她头顶）——
+        // 这也比「气泡跑到下面、看着跟她没关系」好。
+        val gap = (6 * d).toInt()
+        var by = pet.y.toInt() - (bh * tipRatio).toInt() - gap
+        if (by < topInsetPx()) by = topInsetPx()
         lp.x = bx
         lp.y = by
     }

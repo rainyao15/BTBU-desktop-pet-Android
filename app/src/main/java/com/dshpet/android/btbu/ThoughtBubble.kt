@@ -58,6 +58,17 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
 
         /** 单行最多缩到原字号的 62%（再小就宁可挤一点，也不能看不清） */
         private const val MIN_LINE_SCALE = 0.62f
+
+        /**
+         * 看得见的墨迹（椭圆 + 尾巴点）的横向中心占视图宽度的比例。
+         * 椭圆本体 x 81..827，描边 18 往外张 9 → 72..836，中心 454；454/1026 = 0.4425。
+         * 也就是说窗口**右边 20% 是空白**，按 50% 去对宠物就会整体偏左 ——
+         * 这是气泡「不跟着她居中」的第二个原因。
+         */
+        private const val INK_CX = 0.4425f
+
+        /** 尾巴最下面那颗小气泡底边（含描边，y = 664 + 9）在视图高度上的比例 = 673/700 */
+        const val TAIL_TIP = 673f / 700f
     }
 
     /**
@@ -94,6 +105,21 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
     /** onMeasure 算出来的自动缩字系数（1 = 没有缩） */
     var textScale = 1f
         private set
+
+    /**
+     * 气泡跟着宠物一起镜像：尾巴那串小圆点本来就在椭圆的左下方，
+     * 她翻过去之后气泡不翻的话，尾巴就永远朝同一侧偏 —— 看起来就是「不对称」。
+     */
+    var mirrorBubble = false
+        set(v) {
+            if (field == v) return
+            field = v
+            requestLayout()
+            invalidate()
+        }
+
+    /** 当前实际（可能镜像）的墨迹中心比例，上层算 x 用 */
+    val inkCenterX: Float get() = if (mirrorBubble) 1f - INK_CX else INK_CX
 
     fun bind(label: TextView, amount: TextView, hint: TextView) {
         this.label = label
@@ -215,7 +241,8 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
         val w = r - l
         val h = b - t
         val child = getChildAt(0) ?: return
-        val cx = (w * TEXT_CX).toInt()
+        // 文字块跟着气泡一起镜像，否则镜像后文字会跑进右边那片空白里
+        val cx = (w * (if (mirrorBubble) 1f - TEXT_CX else TEXT_CX)).toInt()
         val cy = (h * TEXT_CY).toInt()
         val cw = child.measuredWidth
         val ch = child.measuredHeight
@@ -226,7 +253,15 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
         val f = frame
         if (f != null) {
             f.setBounds(0, 0, width, height)
-            f.draw(canvas)
+            if (mirrorBubble) {
+                // 只镜像底图（椭圆 + 尾巴点）；文字由 onLayout 摆到对称位置，字形不翻
+                canvas.save()
+                canvas.scale(-1f, 1f, width / 2f, 0f)
+                f.draw(canvas)
+                canvas.restore()
+            } else {
+                f.draw(canvas)
+            }
         } else {
             fallbackRect.set(1.5f, 1.5f, width - 1.5f, height - 1.5f)
             val r = minOf(width, height) * 0.18f

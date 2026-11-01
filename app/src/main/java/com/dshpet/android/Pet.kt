@@ -1,6 +1,7 @@
 package com.dshpet.android
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
@@ -316,6 +317,65 @@ class Pet(
         }
     }
 
+    /** 朝向规则（只看位置）：true = 应该朝左画 */
+    private fun wantLeftNow(): Boolean {
+        val midX = context.resources.displayMetrics.widthPixels / 2f
+        val onLeftHalf = x + sizePx / 2f < midX
+        return if (faceOutward) onLeftHalf else !onLeftHalf
+    }
+
+    /** 当前是不是镜像画的（文字类动作不镜像）。气泡要靠它决定跟哪一边。 */
+    val mirrored: Boolean get() = !forcedNoMirror && wantLeftNow()
+
+    // ---- 可见中心：气泡挂在这个点上，而不是盒子中心 ----
+    /** 当前形象「看得见的墨迹」在盒子宽度上的中心比例（0..1，未镜像）；量不出来时 0.5 */
+    private var inkCxRatio = 0.5
+    private val inkCxCache = HashMap<String, Double>()
+
+    /**
+     * 屏幕 px：她**看得见的那半个身子**的中心（已考虑镜像）。
+     *
+     * 为什么不能直接用盒子中心：素材四周的留白不是对称的。实测这张立绘
+     * （610×610）墨迹横向只占 x 45..609，中心在 **0.536**，而不是 0.5；
+     * 镜像之后它又翻到 1-0.536 = 0.464。用盒子中心去摆气泡，
+     * 左边和右边会各自偏一段（而且偏的方向相反）—— 就是“气泡不跟着她对称”的主因。
+     */
+    val visibleCenterX: Double
+        get() = windowX() + sizePx * (if (mirrored) 1.0 - inkCxRatio else inkCxRatio)
+
+    /**
+     * 量一个 Drawable 的墨迹横向中心：等比画进 64×64，扫 alpha>8 的像素取 bbox 中心。
+     * 只在换形象时算一次（结果按 slug 缓存），一次 4096 像素，不影响帧率。
+     */
+    private fun measureInkCx(d: Drawable): Double {
+        val n = 64
+        return try {
+            val bmp = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
+            val c = Canvas(bmp)
+            d.setBounds(0, 0, n, n)
+            d.draw(c)
+            val px = IntArray(n * n)
+            bmp.getPixels(px, 0, n, 0, 0, n, n)
+            bmp.recycle()
+            var minX = n
+            var maxX = -1
+            var cnt = 0
+            for (y in 0 until n) {
+                for (x in 0 until n) {
+                    if (((px[y * n + x] ushr 24) and 0xFF) > 8) {
+                        if (x < minX) minX = x
+                        if (x > maxX) maxX = x
+                        cnt++
+                    }
+                }
+            }
+            // 全透明（还没解码完）或只有零星几个像素（描边噪点）→ 不信这个数，退回 0.5
+            if (maxX < 0 || cnt < n * n / 100) 0.5 else ((minX + maxX + 1) / 2.0 / n).coerceIn(0.2, 0.8)
+        } catch (t: Throwable) {
+            0.5
+        }
+    }
+
     /** 外部（Service）把窗口加上去之后调用一次，把当前位置同步给 WindowManager */
     fun refreshWindow() = push()
 
@@ -434,6 +494,9 @@ class Pet(
                 (current as? AnimatedImageDrawable)?.stop()
                 current = dd
                 currentSlug = slug
+                // 量一次「看得见的中心」（每张素材只算一次）：气泡挂她身上靠这个，
+                // 不能假定墨迹居中 —— 立绘四周留白是不对称的。
+                inkCxRatio = inkCxCache.getOrPut(slug) { measureInkCx(dd) }
                 anim?.start()
                 canvasView.invalidate()
                 Log.i(TAG, "play $slug ${cfg.durationOf(slug)}ms")
@@ -774,9 +837,7 @@ class Pet(
             // 结果就是"永远判成在左半屏"、朝向永远不翻转 —— 之前所有"贴右边仍朝右"
             // 的现象都是这一行造成的。y 同理。
             val petX = this@Pet.x
-            val midX = context.resources.displayMetrics.widthPixels / 2f
-            val onLeftHalf = petX + sizePx / 2f < midX
-            val wantLeft = if (faceOutward) onLeftHalf else !onLeftHalf
+            val wantLeft = wantLeftNow()
             val mirror = !forcedNoMirror && wantLeft
             if (lastWantLeft != wantLeft) {
                 lastWantLeft = wantLeft
