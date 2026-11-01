@@ -291,7 +291,10 @@ class Pet(
         val midX = context.resources.displayMetrics.widthPixels / 2f
         val sideLeft = (x + sizePx / 2f) < midX
         val want = if (faceOutward) sideLeft else !sideLeft
-        if (lastWantLeft != want) canvasView.invalidate()
+        if (lastWantLeft != want) {
+            Diag.record(context, "syncSide x=${x.toInt()} mid=${midX.toInt()} side=$sideLeft want=$want last=$lastWantLeft")
+            canvasView.invalidate()
+        }
     }
 
     /** 外部（Service）把窗口加上去之后调用一次，把当前位置同步给 WindowManager */
