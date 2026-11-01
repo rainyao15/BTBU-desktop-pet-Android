@@ -743,15 +743,13 @@ class Pet(
             val d = current ?: return
             val w = width.toFloat()
             val h = height.toFloat()
-            // 朝向：**只看位置**，不看走没走路。
-            // 这条规则是照抄上游 whale-widget.js 的 applyFlip()：
-            //   if (state.h === 'left') state.flip = true
-            //   else if (state.h === 'right') state.flip = false
-            //   else state.flip = artCenter.cx < snapBounds(vp).F   // 中线
-            // 上游没有任何"按走路方向决定"的分支 —— 之前加的那个分支会让宠物
-            // 一直朝右走到贴墙后仍然朝右（看起来就像没反应）。底图本身朝右。
+            // ⚠ 这里必须用 this@Pet.x：PetCanvas 是 inner class，直接写 x 会被解析成
+            // View.getX()（也就是这个 View 在父容器里的位置，恒为 0），
+            // 结果就是"永远判成在左半屏"、朝向永远不翻转 —— 之前所有"贴右边仍朝右"
+            // 的现象都是这一行造成的。y 同理。
+            val petX = this@Pet.x
             val midX = context.resources.displayMetrics.widthPixels / 2f
-            val onLeftHalf = x + sizePx / 2f < midX
+            val onLeftHalf = petX + sizePx / 2f < midX
             val wantLeft = if (faceOutward) onLeftHalf else !onLeftHalf
             val mirror = !forcedNoMirror && wantLeft
             if (lastWantLeft != wantLeft) {
@@ -759,7 +757,7 @@ class Pet(
                 Diag.record(
                     context,
                     "朝向 wantLeft=$wantLeft mirror=$mirror mode=$mode facing=$facing " +
-                        "x=${x.toInt()} mid=${context.resources.displayMetrics.widthPixels / 2} " +
+                        "x=${petX.toInt()} mid=${context.resources.displayMetrics.widthPixels / 2} " +
                         "outward=$faceOutward"
                 )
             }
@@ -798,7 +796,7 @@ class Pet(
             val rawY = event.rawY.toDouble()
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    Log.i(TAG, "-> down raw=(${rawX.toInt()},${rawY.toInt()}) win=(${windowX().toInt()},${y.toInt()})")
+                    Log.i(TAG, "-> down raw=(${rawX.toInt()},${rawY.toInt()}) win=(${windowX().toInt()},${this@Pet.y.toInt()})")
                     wake()
                     downRawX = rawX
                     downRawY = rawY
