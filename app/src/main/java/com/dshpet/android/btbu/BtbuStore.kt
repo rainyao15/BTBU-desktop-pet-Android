@@ -136,7 +136,9 @@ class BtbuStore(ctx: Context) {
             // curTime 用"本周周三 12:00"而不是 now：教务是拿 curTime 判断你问的是哪一周的
             //（见 captures/课表_A..E.json：curTime 落在第 9 周才返回「模拟电子技术实验 6-7 节 工3-202」）
             val s = BtbuApi.scheduleCalibrated(tok, wantWeek, anchorMsForWeek(wantWeek))
-            saveSchedule(s, System.currentTimeMillis(), wantWeek); any = true
+            // 别把 wantWeek 当 weekOverride 传进来：那表示"这不是本周那次请求"。
+            // 本周请求的桶号本来就等于 s.curWeek，交给 saveSchedule 自己取。
+            saveSchedule(s, System.currentTimeMillis()); any = true
             // 服务器按 curTime 回的 curWeek 就是它对"这周"的判断 → 和本地算的不一致就以它为准，
             // 把学期开始日整体挪 (差几周 × 7) 天，之后 local == server，不会再飘。
             val serverWeek = s.curWeek
