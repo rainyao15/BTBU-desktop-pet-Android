@@ -66,9 +66,21 @@ object Physics {
     /** 画布是 16:9：宠物盒高 = 宽 × 9/16 */
     fun heightFor(size: Double): Double = size * 9.0 / 16.0
 
-    /** 抛掷边界：身体（盒内缩 sideAllow）贴屏幕边缘才反弹 */
-    fun bounds(screenW: Double, screenH: Double, size: Double, sideAllow: Double): Bounds {
-        val h = heightFor(size)
+    /**
+     * 抛掷边界：身体（盒内缩 sideAllow）贴屏幕边缘才反弹。
+     *
+     * height 必须传宠物盒的**真实高度**：形象换成 1:1 立绘后 heightPx = sizePx，
+     * 若这里仍按 16:9 算（0.5625×size），下半屏会有 43% 的行程被提前夹住 ——
+     * 表现就是「往下拖到一半就不动了 / 拖到她身上但窗口没跟上」。
+     */
+    fun bounds(
+        screenW: Double,
+        screenH: Double,
+        size: Double,
+        sideAllow: Double,
+        height: Double = heightFor(size),
+    ): Bounds {
+        val h = if (height > 0.0) height else heightFor(size)
         return Bounds(
             minX = -sideAllow,
             minY = 0.0,

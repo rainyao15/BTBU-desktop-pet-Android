@@ -107,6 +107,9 @@ class Pet(
     private var downRawY = 0.0
     private var downAtMs = 0.0
     private var dragging = false
+    /** 跟手延迟统计：MOVE 帧数 + 从硬件事件时间到窗口提交的累计延时（ms） */
+    private var dragFrames = 0
+    private var dragLagSumMs = 0L
 
     // ---- 抛掷 ----
     private var body = Body(0.0, 0.0, 0.0, 0.0)
@@ -218,6 +221,7 @@ class Pet(
             dm.heightPixels.toDouble(),
             sizePx.toDouble(),
             sideAllow(),
+            heightPx.toDouble(),   // 真实盒高（立绘是 1:1，不能再按 16:9 算）
         )
     }
 
@@ -279,6 +283,21 @@ class Pet(
     private fun push() {
         syncSide()
         onMove(windowX().toInt(), y.toInt(), sizePx, heightPx)
+    }
+
+    /**
+     * 拖拽跟手：直接落在手指位置，**不做任何平滑**，同帧立刻 updateViewLayout。
+     *
+     * 触摸事件本身就是按屏幕刷新率投递的（60/120Hz），所以每来一个 MOVE 就提交一次；
+     * 位置与手指之间不存在“目标 → 弹簧 → 积分”这一串中间环节，也就是 0 帧跟随。
+     */
+    private fun dragTo(nx: Double, ny: Double) {
+        dragTargetX = nx
+        dragTargetY = ny
+        x = nx
+        y = ny
+        clampToScreen()
+        push()
     }
 
     /**
@@ -586,13 +605,20 @@ class Pet(
 
         when (mode) {
             Mode.DRAG -> {
-                val dt = 1.0 / 60.0
-                dragVX = Physics.springStep(dragVX, x, dragTargetX, dt)
-                dragVY = Physics.springStep(dragVY, y, dragTargetY, dt)
-                x += dragVX * dt
-                y += dragVY * dt
-                clampToScreen()
-                push()
+                // 跟手＝手指在哪儿她就在哪儿，这里只做「最后一帧的补位」。
+                //
+                // 以前这里是 dragVX = springStep(...) 再 x += dragVX*dt：
+                // 位置去追一个弹簧目标（K=200, C=30，时间常数 ≈70ms），
+                // 手指停下来她还在后面晃，快速拖时她永远慢半拍 —— 这就是「拖拽延迟」的来源。
+                // 拖动过程必须是 1:1 直跟，弹簧只留给抛掷后的物理。
+                if (x != dragTargetX || y != dragTargetY) {
+                    x = dragTargetX
+                    y = dragTargetY
+                    clampToScreen()
+                    push()
+                }
+                // 拖动期间保持帧循环跑在 16ms：气泡/通知栏/挂件都是在 tick 里跟位置的，
+                // 这里不返 true 的话它们会降到 66ms，变成「她跟上了、气泡在后边追」。
                 active = true
             }
             Mode.THROW -> {
@@ -824,27 +850,45 @@ class Pet(
                     val dist = Math.hypot(rawX - downRawX, rawY - downRawY)
                     if (!dragging && dist > DRAG_SLOP_DP * density) {
                         dragging = true
+                        dragFrames = 0
+                        dragLagSumMs = 0L
                         pressed = false   // 一旦拖动就不再算长按
                         canvasView.removeCallbacks(longPressRunnable)
+                        // 拖起来的瞬间把「贴边缩进去」的位移并进 x：
+                        // 之后跟手就是纯 1:1，不会出现「她在缩、窗口在追」的双重位移。
+                        // （windowX() = x + hideNowPx，这里加进去再清零，视觉位置不变）
+                        if (hideNowPx != 0.0) {
+                            this@Pet.x += hideNowPx
+                            hideNowPx = 0.0
+                            hideTargetPx = 0.0
+                        }
+                        forcedNoMirror = false
                         playDragIfAny()
                     }
                     if (dragging) {
                         mode = Mode.DRAG
-                        // 从「缩进去」的状态拖出来时要把当前躲藏位移算进去：
-                        // 视觉位置 = x + hideNowPx，光动 x 会让她一边探出一边跑偏
-                        dragTargetX = rawX - grabDX - hideNowPx
-                        dragTargetY = rawY - grabDY
                         dragVX = 0.0
                         dragVY = 0.0
-                        // 拖动中让动画跟着朝向走
-                        val wx = windowX()
-                        if (dragTargetX > wx + 2) { facing = 1; forcedNoMirror = false }
-                        else if (dragTargetX < wx - 2) { facing = -1; forcedNoMirror = false }
+                        // 关键：在**触摸回调里**直接改位置并立刻提交给 WindowManager。
+                        // 以前只在这里记一个 target，真正挪窗口要等下一次 tick
+                        // （handler 16ms + 频移 + 弹簧惯性 ≈ 100ms）—— 这就是跟手延迟。
+                        dragTo(rawX - grabDX, rawY - grabDY)
+                        dragFrames++
+                        dragLagSumMs += (SystemClock.uptimeMillis() - event.eventTime).coerceAtLeast(0L)
                     }
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
                     Log.i(TAG, "-> up drag=$dragging long=$longPressFired")
+                    if (dragging && dragFrames > 0) {
+                        // 自检用：正常应该是 1~3 帧 + 8~20ms（硬件事件 → 提交），
+                        // 以前带弹簧的那版这一项在 60~120ms。
+                        Log.i(
+                            TAG,
+                            "拖拽跟手：帧=$dragFrames 平均=${dragLagSumMs / dragFrames}ms " +
+                                "(输入→提交，0 表示同一帧内完成)",
+                        )
+                    }
                     pressed = false
                     canvasView.removeCallbacks(longPressRunnable)
                     // 上游 pressUp()：极短点按先"补提交"一次压扁，再回弹，否则 30ms 的点击看不见
