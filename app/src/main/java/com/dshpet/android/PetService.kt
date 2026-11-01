@@ -64,6 +64,10 @@ class PetService : Service() {
         const val ACTION_DATA = "com.dshpet.android.action.DATA"
         /** 一句台词在气泡里停留多久 */
         private const val SPEECH_MS = 3600L
+        /** 气泡出现/消失动画时长 */
+        private const val BUBBLE_ANIM_MS = 500L
+        /** 多久没点气泡、也没点桌宠 → 自己收起来 */
+        private const val BUBBLE_AUTO_HIDE_MS = 5_000L
         /** 气泡翻页后多久自动回到默认页（毫秒） */
         private const val PAGE_RESET_MS = 30_000L
         /** 空闲时的慢拍（毫秒）：没有东西在动就不要每帧醒 */
@@ -296,7 +300,7 @@ class PetService : Service() {
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(big))
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notif)   // 状态栏要单色剪影，用彩色图标会变白方块
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -573,6 +577,7 @@ class PetService : Service() {
                 if (isSpeaking()) return@setOnClickListener
                 try {
                     cycleBubblePage()
+                    keepBubbleAlive()
                 } catch (t: Throwable) {
                     Diag.record(this@PetService, "气泡翻页失败", t)
                 }
@@ -581,6 +586,7 @@ class PetService : Service() {
             setOnLongClickListener {
                 if (isSpeaking()) return@setOnLongClickListener false
                 try {
+                    keepBubbleAlive()
                     com.dshpet.android.btbu.BtbuSync.refreshAsync(this@PetService) { ok ->
                         updateDataBubble(true)
                         updateNotification()
@@ -612,6 +618,17 @@ class PetService : Service() {
         placeBubble(lp, bw, bh, pet, TAIL_COL_CX, com.dshpet.android.btbu.ThoughtBubble.TAIL_TIP)
         try {
             w.addView(box, lp)
+            // 默认收起来：点一下桌宠/气泡才出现
+            box.visibility = View.INVISIBLE
+            bubbleShown = false
+            box.onRevealEnd = { show ->
+                if (!show) {
+                    try {
+                        box.visibility = View.INVISIBLE
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
             dbRoot = box
             dbParams = lp
             dbPet = pet
@@ -644,6 +661,9 @@ class PetService : Service() {
 
     private var bubblePage = BubblePage.NEXT
     private var bubblePageAtMs = 0L
+    /** 气泡现在是"露着"还是"收着"（默认收着，点一下才出现） */
+    private var bubbleShown = false
+    private val hideBubbleRunnable = Runnable { hideBubble() }
 
     /**
      * 工作日 / 周末模式：
@@ -783,6 +803,45 @@ class PetService : Service() {
         dbSig = sig
     }
 
+    // ------------------------------------------------------------ 气泡的显隐（点一下才出现）
+
+    /** 让气泡出现（已经在的话只重置"5 秒自己收起来"的计时） */
+    private fun showBubble() {
+        val box = dbRoot ?: return
+        handler.removeCallbacks(hideBubbleRunnable)
+        handler.postDelayed(hideBubbleRunnable, BUBBLE_AUTO_HIDE_MS)
+        if (bubbleShown) return
+        bubbleShown = true
+        try {
+            updateDataBubble(true)          // 先按当前数据把内容/位置摆好
+            box.visibility = View.VISIBLE
+        } catch (t: Throwable) {
+            Diag.record(this, "气泡显示失败", t)
+        }
+        // 从下往上依次显形（底下小圈 → 中间小圈 → 大椭圆），约 0.5 秒
+        box.playReveal(true, BUBBLE_ANIM_MS)
+    }
+
+    /** 5 秒没人点：从上往下逐渐消失，约 0.5 秒 */
+    private fun hideBubble() {
+        handler.removeCallbacks(hideBubbleRunnable)
+        val box = dbRoot ?: return
+        if (!bubbleShown) return
+        bubbleShown = false
+        try {
+            box.playReveal(false, BUBBLE_ANIM_MS)   // 收完由 onRevealEnd 把窗口设为 INVISIBLE
+        } catch (t: Throwable) {
+            box.visibility = View.INVISIBLE
+        }
+    }
+
+    /** 点了气泡：重新计 5 秒 */
+    private fun keepBubbleAlive() {
+        if (!bubbleShown) return
+        handler.removeCallbacks(hideBubbleRunnable)
+        handler.postDelayed(hideBubbleRunnable, BUBBLE_AUTO_HIDE_MS)
+    }
+
     /** 按内容重新量一次尺寸 + 摆放 + 提交（气泡只有一个窗口，尺寸会随台词/数据变化） */
     private fun relayoutBubble() {
         val box = dbRoot ?: return
@@ -814,6 +873,7 @@ class PetService : Service() {
      * 位置只跟宠物窗口位置有关，所以它俩永远是同一个整体（相对距离恒定）。
      */
     private fun followDataBubble() {
+        if (!bubbleShown) return          // 收着的时候不用每帧跟着跑
         val box = dbRoot ?: return
         val lp = dbParams ?: return
         val pet = dbPet ?: return
@@ -829,7 +889,10 @@ class PetService : Service() {
     }
 
     private fun dismissDataBubble() {
+        handler.removeCallbacks(hideBubbleRunnable)
+        bubbleShown = false
         val box = dbRoot ?: return
+        box.cancelReveal()
         try {
             wm?.removeView(box)
         } catch (_: Throwable) {
@@ -862,6 +925,7 @@ class PetService : Service() {
     private fun say(text: String) {
         if (dbRoot == null || dbPet == null) return      // 气泡没了就不说，不另开窗口
         if (text.isBlank()) return
+        showBubble()                                     // 台词也要让气泡先显形
         val now = SystemClock.uptimeMillis()
         speechText = text
         speechUntilMs = now + SPEECH_MS
@@ -951,6 +1015,7 @@ class PetService : Service() {
     }
 
     private fun onPetTapped(pet: Pet) {
+        showBubble()          // 点一下桌宠，气泡出现（0.5 秒从下往上显形）
         val now = SystemClock.uptimeMillis()
         lastInteractMs = now
         if (now - tapWindowMs > 6000L) {

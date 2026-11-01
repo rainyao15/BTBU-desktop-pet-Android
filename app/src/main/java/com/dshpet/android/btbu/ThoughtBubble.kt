@@ -1,5 +1,8 @@
 package com.dshpet.android.btbu
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Typeface
@@ -7,6 +10,8 @@ import android.graphics.drawable.Drawable
 import android.util.TypedValue
 import android.widget.Chronometer
 import android.widget.FrameLayout
+import android.view.animation.AccelerateInterpolator
+import android.view.animation.DecelerateInterpolator
 import android.widget.TextView
 import com.dshpet.android.R
 
@@ -117,6 +122,52 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
             requestLayout()
             invalidate()
         }
+
+    // ---- 出现/消失动画 ----
+    /**
+     * 0 = 完全收起，1 = 完全显示。
+     * 画的时候按 [reveal] 从**下往上**裁一刀：底下那颗小圆点先出来，然后中间那颗，
+     * 最后才是大椭圆（这正是"从下往上一共两个小圈和一个大气泡圈圈依次显形"）。
+     * 反向（1→0）就是上一刀先没、再下面两颗，即"由上到下逐渐消失"。
+     */
+    private var reveal = 0f      // 默认收起（窗口创建时就隐身）
+    private var revealAnim: ValueAnimator? = null
+
+    /** 动画结束回调：show=true 表示显示完了，false 表示收完了 */
+    var onRevealEnd: ((Boolean) -> Unit)? = null
+
+    fun playReveal(show: Boolean, durationMs: Long = 500L) {
+        revealAnim?.cancel()
+        val from = reveal
+        val to = if (show) 1f else 0f
+        if (kotlin.math.abs(from - to) < 0.001f) {
+            reveal = to
+            invalidate()
+            onRevealEnd?.invoke(show)
+            return
+        }
+        val a = ValueAnimator.ofFloat(from, to)
+        a.duration = durationMs
+        // 出现用减速（先快后慢，收尾软），消失用加速（最后"啪"一下收掉）
+        a.interpolator = if (show) DecelerateInterpolator(1.6f) else AccelerateInterpolator(1.4f)
+        a.addUpdateListener {
+            reveal = it.animatedValue as Float
+            invalidate()
+        }
+        a.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) {
+                if (revealAnim === animation) revealAnim = null
+                onRevealEnd?.invoke(show)
+            }
+        })
+        revealAnim = a
+        a.start()
+    }
+
+    fun cancelReveal() {
+        revealAnim?.cancel()
+        revealAnim = null
+    }
 
     /** 当前实际（可能镜像）的墨迹中心比例，上层算 x 用 */
     val inkCenterX: Float get() = if (mirrorBubble) 1f - INK_CX else INK_CX
@@ -250,6 +301,19 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
     }
 
     override fun dispatchDraw(canvas: Canvas) {
+        val r = reveal.coerceIn(0f, 1f)
+        if (r <= 0.001f) return          // 完全收起：底图、文字都不画
+        val restore = if (r < 0.999f) {
+            canvas.save()
+            // 只露出「下半截」：r=0.01 时只有最底下那一点，r=1 时整块都在
+            canvas.clipRect(0f, height * (1f - r), width.toFloat(), height.toFloat())
+            1
+        } else {
+            0
+        }
+        // 文字比底图晚一点淡入（r=0.55 才开始），这样"圈圈先长出来、字后浮现"
+        getChildAt(0)?.alpha = ((r - 0.45f) / 0.55f).coerceIn(0f, 1f)
+
         val f = frame
         if (f != null) {
             f.setBounds(0, 0, width, height)
@@ -269,6 +333,7 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
             canvas.drawRoundRect(fallbackRect, r, r, fallbackStroke)
         }
         super.dispatchDraw(canvas)
+        if (restore == 1) canvas.restore()
     }
 
     /** 气泡尾巴尖（最后那个小气泡底边）离视图顶部的像素距离，上层拿它算贴头顶的偏移 */

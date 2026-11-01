@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标（Android 8.0+）：整张立绘铺满 108dp 画布，交给系统遮罩去裁（圆/方/水滴都好看）。
+  不做"缩到 78% + 纯色底"那一套：立绘背景本身是带渐变的深蓝，缩进去会露出一圈色差方块。
+  旧系统（API 26 以下）走 mipmap-*dpi/ic_launcher.png（方形整图）。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_bg" />
+</adaptive-icon>

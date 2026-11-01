@@ -21,4 +21,6 @@
     <color name="chip_warn_text">#FFC46B</color>
     <color name="chip_off_bg">#CC2A2440</color>
     <color name="chip_off_text">#B9A6FF</color>
+    <!-- 自适应图标背景色：从 logo 左上角取色，和立绘的背景无缝 -->
+    <color name="ic_launcher_bg">#001D5F</color>
 </resources>
