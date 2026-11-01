@@ -40,6 +40,20 @@
             android:label="@string/lines_editor_title"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- 只在"锁屏上显示桌宠"时需要；不开也不影响其它功能 -->
+        <service
+            android:name=".PetA11yService"
+            android:exported="true"
+            android:label="@string/a11y_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/pet_accessibility" />
+        </service>
+
         <service
             android:name=".PetService"
             android:exported="false"

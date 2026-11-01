@@ -64,6 +64,8 @@ class PetService : Service() {
         const val ACTION_DATA = "com.dshpet.android.action.DATA"
         /** 一句台词在气泡里停留多久 */
         private const val SPEECH_MS = 3600L
+        /** 生气台词在气泡里停多久（和气泡自动收起同一个 5 秒） */
+        private const val ANGRY_SPEECH_MS = 5_000L
         /** 气泡出现/消失动画时长 */
         private const val BUBBLE_ANIM_MS = 500L
         /** 多久没点气泡、也没点桌宠 → 自己收起来 */
@@ -112,6 +114,19 @@ class PetService : Service() {
     private class Held(val pet: Pet, val view: View, val params: WindowManager.LayoutParams)
 
     private var wm: WindowManager? = null
+
+    /** 能用无障碍浮层就用它（锁屏也能看见），否则退回普通悬浮窗 */
+    private fun overlayWindowManager(): WindowManager? = try {
+        LockOverlay.windowManager() ?: getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    } catch (t: Throwable) {
+        Diag.record(this, "取 WindowManager 失败", t)
+        null
+    }
+
+    /** 窗口类型：无障碍可用时用 TYPE_ACCESSIBILITY_OVERLAY（能盖在锁屏上） */
+    private fun overlayType(): Int =
+        if (LockOverlay.active) WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+        else WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
     private val handler = Handler(Looper.getMainLooper())
     private val held = ArrayList<Held>()
     private var cfg: PetConfig? = null
@@ -161,7 +176,15 @@ class PetService : Service() {
             Diag.record(this, "onCreate: 台词库加载失败", t)
         }
         try {
-            wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            wm = overlayWindowManager()
+            // 无障碍服务开了/关了 → 窗口类型要跟着换（锁屏能不能看见就靠这个）
+            LockOverlay.onChange = {
+                try {
+                    handler.post { if (Prefs.running(this)) reload(this) }
+                } catch (_: Throwable) {
+                }
+            }
+            Diag.record(this, "onCreate: 锁屏浮层=${if (LockOverlay.active) "无障碍可用" else "普通悬浮窗"}")
         } catch (t: Throwable) {
             Diag.record(this, "onCreate: 取 WindowManager 失败", t)
         }
@@ -332,6 +355,11 @@ class PetService : Service() {
     // ------------------------------------------------------------ 悬浮窗
 
     private fun spawnAll(sizeDp: Int) {
+        // 每次重建都重新判断：这次用普通悬浮窗，还是无障碍浮层（能上锁屏）
+        try {
+            wm = overlayWindowManager()
+        } catch (_: Throwable) {
+        }
         val w = wm
         if (w == null) {
             Diag.record(this, "spawnAll: WindowManager 为空")
@@ -393,22 +421,25 @@ class PetService : Service() {
                     }
                 }
                 pet.applyScale(sizeDp)
-                pet.allowEdgeHide = Prefs.edgeHideOn(this)
+                // 贴边躲藏已移除（allowEdgeHide 在 Pet 里固定为 false）
                 pet.onLongPress = { showActionMenu(pet) }
                 pet.onTap = { onPetTapped(pet) }
                 pet.onThrown = { onPetThrown(pet) }
                 pet.requestFrame = { requestFrames() }
                 pet.onSettled = { onPetSettled(pet) }
+                pet.onAngry = { onPetAngry(pet) }
                 pet.onHiddenChange = { hidden -> onPetHiddenChange(pet, hidden) }
 
                 val lp = WindowManager.LayoutParams(
                     pet.sizePx,
                     pet.heightPx,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    overlayType(),
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                         WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                        WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                        WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
+                        @Suppress("DEPRECATION")
+                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED,
                     PixelFormat.TRANSLUCENT,
                 )
                 lp.gravity = Gravity.TOP or Gravity.START
@@ -609,9 +640,11 @@ class PetService : Service() {
         val bh = box.measuredHeight.coerceAtLeast(dpPx(40))
         val lp = WindowManager.LayoutParams(
             bw, bh,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED,
             PixelFormat.TRANSLUCENT,
         )
         lp.gravity = Gravity.TOP or Gravity.START
@@ -935,6 +968,31 @@ class PetService : Service() {
         Diag.record(this, "台词「$text」")
     }
 
+    /**
+     * 说一句**指定的**话（比如"别乱丢我，我生气了！"），停留 [durationMs] 毫秒。
+     * 和 say() 的区别：不随机、不走 20 秒冷却，气泡照常用 0.5 秒"从下往上"的出场动画。
+     */
+    private fun sayFixed(text: String, durationMs: Long) {
+        if (dbRoot == null || dbPet == null) return
+        val now = SystemClock.uptimeMillis()
+        speechText = text
+        speechUntilMs = now + durationMs
+        lastBubbleMs = now
+        showBubble()                     // 先让气泡显形（0.5 秒），内容已经是这句话
+        applyBubbleContent(true)
+        relayoutBubble()
+        Diag.record(this, "指定台词「$text」${durationMs}ms")
+    }
+
+    /** 被丢到生气：气泡里喊一句，5 秒后照常收起 */
+    private fun onPetAngry(pet: Pet) {
+        try {
+            sayFixed("别乱丢我，我生气了！", ANGRY_SPEECH_MS)
+        } catch (t: Throwable) {
+            Diag.record(this, "生气台词失败", t)
+        }
+    }
+
     /** 台词结束：恢复数据行 */
     private fun endSpeech() {
         if (!isSpeaking() && speechText.isEmpty()) return
@@ -1016,6 +1074,8 @@ class PetService : Service() {
 
     private fun onPetTapped(pet: Pet) {
         showBubble()          // 点一下桌宠，气泡出现（0.5 秒从下往上显形）
+        // 生气台词还挂着的话，点她一下就直接切到数据页（课表/余额/网费）
+        if (isSpeaking()) endSpeech()
         val now = SystemClock.uptimeMillis()
         lastInteractMs = now
         if (now - tapWindowMs > 6000L) {
@@ -1234,7 +1294,7 @@ class PetService : Service() {
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         )
@@ -1348,7 +1408,7 @@ class PetService : Service() {
             }
         }
         // 台词到点 → 切回数据（同一块气泡，只是换内容）
-        if (speechText.isNotEmpty() && !isSpeaking()) {
+        if (speechText.isNotEmpty() && !isSpeaking() && bubbleShown) {
             try {
                 endSpeech()
             } catch (t: Throwable) {

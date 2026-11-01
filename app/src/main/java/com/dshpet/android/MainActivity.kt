@@ -40,7 +40,7 @@ class MainActivity : Activity() {
     private lateinit var btnSound: TextView
     private lateinit var btnPets: TextView
     private lateinit var btnBubble: TextView
-    private lateinit var btnEdge: TextView
+    private lateinit var btnLock: TextView
     private lateinit var btnKeepAlive: TextView
     private lateinit var linesPath: TextView
     private lateinit var btnLinesEdit: TextView
@@ -70,7 +70,7 @@ class MainActivity : Activity() {
         btnSound = findViewById(R.id.btnSound)
         btnPets = findViewById(R.id.btnPets)
         btnBubble = findViewById(R.id.btnBubble)
-        btnEdge = findViewById(R.id.btnEdge)
+        btnLock = findViewById(R.id.btnLock)
         btnKeepAlive = findViewById(R.id.btnKeepAlive)
         linesPath = findViewById(R.id.linesPath)
         btnLinesEdit = findViewById(R.id.btnLinesEdit)
@@ -158,12 +158,22 @@ class MainActivity : Activity() {
             chipToggle(btnBubble, on)
         }
 
-        // 贴边躲藏开关
-        btnEdge.setOnClickListener {
-            val on = !Prefs.edgeHideOn(this)
-            Prefs.setEdgeHideOn(this, on)
-            chipToggle(btnEdge, on)
-            reloadIfRunning()
+        // 锁屏显示：靠无障碍服务（拿 TYPE_ACCESSIBILITY_OVERLAY，才能盖在锁屏上）
+        btnLock.setOnClickListener {
+            if (LockOverlay.active) {
+                Toast.makeText(this, "已开启：锁屏上也会显示她", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(
+                    this,
+                    "在列表里找到「北工商桌宠 · 锁屏显示」并打开",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            try {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            } catch (t: Throwable) {
+                Diag.record(this, "打开无障碍设置失败", t)
+            }
         }
 
         // 后台保活开关：从最近任务隐藏 + 申请电池优化豁免
@@ -256,6 +266,10 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        try {
+            chipToggle(btnLock, LockOverlay.active)
+        } catch (_: Throwable) {
+        }
         // 每次回到设置页都重新对齐一次「从最近任务隐藏」；电池优化豁免只自动问一次
         val keep = Prefs.keepAlive(this)
         applyKeepAlive(keep, keep && !Prefs.keepAliveAsked(this))
@@ -403,7 +417,7 @@ class MainActivity : Activity() {
         sizeLabel.text = getString(R.string.size_value, Prefs.sizeDp(this))
         chipSound(Prefs.soundOn(this))
         chipToggle(btnBubble, Prefs.bubbleOn(this))
-        chipToggle(btnEdge, Prefs.edgeHideOn(this))
+        chipToggle(btnLock, LockOverlay.active)
         chipPets(Prefs.petCount(this))
         try {
             renderBtbuStatus()

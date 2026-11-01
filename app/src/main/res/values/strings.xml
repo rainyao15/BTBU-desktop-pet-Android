@@ -34,7 +34,6 @@
     <string name="pets_title">桌宠只数</string>
     <string name="pets_value">%1$d 只</string>
     <string name="bubble_title">碎碎念</string>
-    <string name="edge_title">贴边躲藏</string>
     <string name="menu_speak">💬 让她说句话</string>
 
     <string name="lines_title">台词库</string>
@@ -71,4 +70,9 @@
     <string name="menu_title">选择动作</string>
 
     <string name="need_overlay">还没有悬浮窗权限，先点「授权悬浮窗」。</string>
+    <!-- 锁屏显示（无障碍） -->
+    <string name="a11y_label">北工商桌宠 · 锁屏显示</string>
+    <string name="a11y_summary">让桌宠在锁屏页面上也显示出来</string>
+    <string name="a11y_desc">开启后，桌宠和它头顶的气泡可以在锁屏页面上显示。本服务不读取屏幕内容，也不监听按键。</string>
+    <string name="lock_title">锁屏显示</string>
 </resources>

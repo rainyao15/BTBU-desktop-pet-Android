@@ -12,7 +12,6 @@ object Prefs {
     private const val KEY_SOUND = "sound_on"
     private const val KEY_PETS = "pet_count"
     private const val KEY_BUBBLE = "bubble_on"
-    private const val KEY_EDGE_HIDE = "edge_hide"
     private const val KEY_ACC_USER = "acc_user"
     private const val KEY_ACC_PASS = "acc_pass"
     private const val KEY_UUID = "dev_uuid"
@@ -63,11 +62,7 @@ object Prefs {
     }
 
     /** 贴边躲藏（松手吸附到屏幕边缘，闲置后只露半个身子），默认开启 */
-    fun edgeHideOn(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_EDGE_HIDE, true)
 
-    fun setEdgeHideOn(ctx: Context, v: Boolean) {
-        sp(ctx).edit().putBoolean(KEY_EDGE_HIDE, v).apply()
-    }
 
     /** 后台保活：从「最近任务」隐藏 + 被系统回收后自动回来（默认开启） */
     fun keepAlive(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_KEEP_ALIVE, true)

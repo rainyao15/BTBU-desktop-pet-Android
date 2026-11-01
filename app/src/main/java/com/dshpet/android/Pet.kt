@@ -49,6 +49,13 @@ class Pet(
         private const val HIDE_RATIO = 0.55
         /** 躲藏位移的每帧平滑系数（按 16.67ms 一帧标定，实际按真实 dt 换算） */
         private const val HIDE_LERP = 0.18
+        /** 丢几次会生气 */
+        private const val ANGRY_THROWS = 2
+        /** 生气持续多久（5 分钟，期间再丢也不续期） */
+        private const val ANGRY_MS = 5 * 60_000L
+        /** 生气立绘 / 平静立绘 */
+        private const val ANGRY_SLUG = "res:pet_idle2"
+        private const val CALM_SLUG = "res:pet_idle"
         /** 抛掷物理的固定积分步长（秒）：与屏幕刷新率解耦 */
         private const val PHYS_STEP_S = 1.0 / 120.0
         /** 载入解压/解码动画用的后台线程 */
@@ -124,8 +131,12 @@ class Pet(
     private var moveDurationMs = MOVE_WINDOW_MS
 
     // ---- 贴边躲藏 ----
-    /** 是否允许贴边躲藏（设置页可关） */
-    var allowEdgeHide = true
+    /**
+     * 贴边躲藏（缩进屏幕边、只露半个身子偷瞄）**已永久关闭**。
+     * 用户明确不要这个待机动作：她掉在边上就停在边上，不会再自己钻进去。
+     * 字段保留只是为了不动下面那一堆位移/坐标逻辑（hideNowPx 恒为 0）。
+     */
+    var allowEdgeHide = false
     /** -1 = 贴在左边缘，+1 = 贴在右边缘，0 = 没贴边 */
     private var snapEdge = 0
     /** 躲藏位移目标（负数往左缩，正数往右缩） */
@@ -190,6 +201,16 @@ class Pet(
     var onThrown: (() -> Unit)? = null
     /** 拖拽/抛掷彻底停下来（含落到边缘吸附） */
     var onSettled: (() -> Unit)? = null
+    /** 被丢到生气时叫一声（Service 负责在气泡里说那句台词） */
+    var onAngry: (() -> Unit)? = null
+
+    // ---- 生气（丢两次）----
+    /** 被丢出去几次（有速度才算，轻轻放下不算） */
+    private var throwCount = 0
+    private var angry = false
+    private var angryUntilMs = 0L
+    /** 生气期间强制用的立绘；null = 返回正常待机 */
+    private var forcedSlug: String? = null
     /** 缩进去躲起来 / 探出来 */
     var onHiddenChange: ((Boolean) -> Unit)? = null
 
@@ -485,11 +506,13 @@ class Pet(
         return ImageDecoder.decodeDrawable(src)
     }
 
-    private fun play(slug: String, onEnd: (() -> Unit)? = null) {
-        if (slug.isEmpty()) {
+    private fun play(slug0: String, onEnd: (() -> Unit)? = null) {
+        if (slug0.isEmpty()) {
             onEnd?.invoke()
             return
         }
+        // 生气期间不让"平静立绘"混进来（点她、拖她、走过来都保持愠怒）
+        val slug = forcedSlug?.takeIf { slug0 == CALM_SLUG } ?: slug0
         loadToken++
         val token = loadToken
         io.execute {
@@ -571,8 +594,37 @@ class Pet(
         playRandomAction()
     }
 
+    /** 被丢第二次 → 生气 5 分钟（期间再丢不续期、不再触发） */
+    private fun becomeAngry() {
+        angry = true
+        angryUntilMs = SystemClock.uptimeMillis() + ANGRY_MS
+        throwCount = 0
+        forcedSlug = ANGRY_SLUG
+        play(ANGRY_SLUG)          // 原地换成生气立绘，不排队（气消了 tick 会切回去）
+        Log.i(TAG, "生气：持续 ${ANGRY_MS / 60_000} 分钟")
+        onAngry?.invoke()
+    }
+
+    /** 气消了 → 换回平静立绘，恢复正常待机链 */
+    private fun calmDown() {
+        angry = false
+        angryUntilMs = 0L
+        forcedSlug = null
+        play(CALM_SLUG) { scheduleNext() }
+        Log.i(TAG, "气消了")
+    }
+
+    /** 现在是不是生气中（给 Service 判断用） */
+    val isAngry: Boolean get() = angry
+
     private fun playIdle() {
         Log.i(TAG, "-> playIdle")
+        // 生气期间：一直用生气立绘，不重新排队（避免每 2.6 秒重新解码同一张图）
+        forcedSlug?.let {
+            mode = Mode.IDLE
+            if (currentSlug != it) play(it)
+            return
+        }
         if (cfg.idle.isEmpty()) { playRandomAction(); return }
         mode = Mode.IDLE
         play(cfg.idle.random()) { scheduleNext() }
@@ -652,6 +704,7 @@ class Pet(
     private fun nowMs(): Double = SystemClock.uptimeMillis().toDouble()
 
     private fun startThrow(vx: Double, vy: Double) {
+        if (!angry) throwCount++
         body = Body(x, y, vx, vy)
         mode = Mode.THROW
         playDragIfAny()
@@ -686,6 +739,9 @@ class Pet(
     fun tick(dtMs: Double = 16.0): Boolean {
         val now = SystemClock.uptimeMillis()
         var active = false
+
+        // 生气到点 → 自动换回平静
+        if (angry && now >= angryUntilMs) calmDown()
 
         when (mode) {
             Mode.DRAG -> {
@@ -736,6 +792,8 @@ class Pet(
                     snapIfNearEdge()
                     playIdle()
                     onSettled?.invoke()
+                    // 第二次被丢、而且已经落地静止 → 生气 5 分钟
+                    if (!angry && throwCount >= ANGRY_THROWS) becomeAngry()
                 } else {
                     active = true
                 }
@@ -780,7 +838,7 @@ class Pet(
                 if (near == 0 && hidden) setHidden(false)
             }
         }
-        // 闲置够久 → 缩进去；位移每帧平滑逼近目标
+        // 贴边躲藏已移除：不再有"闲置 12 秒缩进去偷瞄"这一下
         if (allowEdgeHide && !hidden && snapEdge != 0 && now - lastInteractMs > HIDE_DELAY_MS) {
             setHidden(true)
         }

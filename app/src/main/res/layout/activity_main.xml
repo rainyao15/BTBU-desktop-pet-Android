@@ -410,6 +410,7 @@
                         android:textSize="13sp" />
                 </LinearLayout>
 
+                <!-- 锁屏显示：需要用户在系统设置里打开本 App 的无障碍服务 -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -421,23 +422,23 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="@string/edge_title"
+                        android:text="@string/lock_title"
                         android:textColor="@color/text"
                         android:textSize="14sp" />
 
                     <TextView
-                        android:id="@+id/btnEdge"
+                        android:id="@+id/btnLock"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:background="@drawable/bg_chip_ok"
+                        android:background="@drawable/bg_chip_off"
                         android:clickable="true"
                         android:focusable="true"
                         android:paddingStart="18dp"
                         android:paddingTop="6dp"
                         android:paddingEnd="18dp"
                         android:paddingBottom="6dp"
-                        android:text="@string/sound_on"
-                        android:textColor="@color/chip_ok_text"
+                        android:text="@string/sound_off"
+                        android:textColor="@color/chip_off_text"
                         android:textSize="13sp" />
                 </LinearLayout>
             </LinearLayout>
