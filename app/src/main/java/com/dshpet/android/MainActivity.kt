@@ -498,8 +498,8 @@ class MainActivity : Activity() {
     private fun renderImageChip() {
         val rig = PetConfig.hasRigAssets(this)
         btnBtbuImage.text = when {
-            !rig -> "形象：鲸鱼娘立绘（动画包未打包）"
-            Prefs.petImage(this) -> "形象：鲸鱼娘立绘"
+            !rig -> "形象：北工商版立绘（动画包未打包）"
+            Prefs.petImage(this) -> "形象：北工商版立绘"
             else -> "形象：106 段动画"
         }
         btnBtbuImage.isEnabled = rig

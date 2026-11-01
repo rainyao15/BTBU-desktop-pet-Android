@@ -281,8 +281,14 @@ class BtbuStore(ctx: Context) {
             .putString("lessons", lessonJson.toString())
             .putString("term", "${s.xn}-${s.xq}|${s.describe}")
             .putInt("curWeek", base)
-            .putInt("curWeekRaw", s.curWeek)
-            .putInt("scheduleWeek", s.curWeek)
+            // 「服务器 curWeek」只在**本周那次请求**里记：顺手补拉下周时也会走这里，
+            // 如果照写，自检行会显示成服务器的"下周周次"，看着像本地周次错了。
+            .apply {
+                if (weekOverride < 1) {
+                    putInt("curWeekRaw", s.curWeek)
+                    putInt("scheduleWeek", s.curWeek)
+                }
+            }
             .putInt("courseCount", s.courses.size)
             .putInt("totalWeek", s.totalWeek.coerceAtLeast(1))
             .putLong("scheduleAt", at)
