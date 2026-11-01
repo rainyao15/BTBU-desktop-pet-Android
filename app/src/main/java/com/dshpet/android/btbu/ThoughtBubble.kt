@@ -61,6 +61,14 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
         private const val TEXT_W = 0.68f
         private const val TEXT_H = 0.50f
 
+        /**
+         * 台词模式下，副行（当正文用）字号放大倍数。
+         * 副行原来是 HINT_U=56u（约 13sp），台词稍微放大到 1.45× ≈ 81u，
+         * 比标题 66u 大、比大数字 128u 小 —— 仍然走 onMeasure 的自动缩字，
+         * 保证塞进椭圆（TEXT_W=0.68 / TEXT_H=0.50 的安全框）里，不会顶穿描边。
+         */
+        private const val SPEECH_SCALE = 1.45f
+
         /** 单行最多缩到原字号的 62%（再小就宁可挤一点，也不能看不清） */
         private const val MIN_LINE_SCALE = 0.62f
 
@@ -169,6 +177,15 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
         revealAnim = null
     }
 
+    /** 台词模式：三行里的"副行"被当成正文，字号放大一点（但仍受安全框约束） */
+    var speechMode = false
+        set(v) {
+            if (field == v) return
+            field = v
+            requestLayout()
+            invalidate()
+        }
+
     /** 当前实际（可能镜像）的墨迹中心比例，上层算 x 用 */
     val inkCenterX: Float get() = if (mirrorBubble) 1f - INK_CX else INK_CX
 
@@ -221,7 +238,10 @@ class ThoughtBubble(context: Context) : FrameLayout(context) {
         val k = unit
         label?.setTextSize(TypedValue.COMPLEX_UNIT_PX, k * VW * LABEL_U * sLabel)
         amount?.setTextSize(TypedValue.COMPLEX_UNIT_PX, k * VW * AMOUNT_U * sAmount)
-        hint?.setTextSize(TypedValue.COMPLEX_UNIT_PX, k * VW * HINT_U * sHint)
+        hint?.setTextSize(
+            TypedValue.COMPLEX_UNIT_PX,
+            k * VW * HINT_U * sHint * (if (speechMode) SPEECH_SCALE else 1f),
+        )
 
         val timerPx = k * VW * TIMER_U * sHint
         timer?.setTextSize(TypedValue.COMPLEX_UNIT_PX, timerPx)

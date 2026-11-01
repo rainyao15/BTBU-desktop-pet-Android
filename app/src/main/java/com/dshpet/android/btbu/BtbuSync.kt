@@ -64,7 +64,10 @@ object BtbuSync {
                 BtbuWidgetProvider.refresh(app)         // 数据变了，顺手刷桌面挂件
                 // 把「周次是怎么算出来的」记进诊断：第 N 周对不上时，这一行直接说明问题
                 try {
-                    com.dshpet.android.Diag.record(app, "同步完成 · " + store(app).weekInfo())
+                    com.dshpet.android.Diag.record(
+                        app,
+                        "同步完成 · " + store(app).weekInfo() + " · " + store(app).scheduleInfo(),
+                    )
                     // 课表到底存下来没有：courseCount 长期是 0 就说明解析/落盘有问题
                     com.dshpet.android.Diag.record(
                         app,

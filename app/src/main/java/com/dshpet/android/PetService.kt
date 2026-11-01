@@ -64,8 +64,13 @@ class PetService : Service() {
         const val ACTION_DATA = "com.dshpet.android.action.DATA"
         /** 一句台词在气泡里停留多久 */
         private const val SPEECH_MS = 3600L
-        /** 生气台词在气泡里停多久（和气泡自动收起同一个 5 秒） */
-        private const val ANGRY_SPEECH_MS = 5_000L
+        /** 主动搭话：每次"掷骰子"的间隔范围（毫秒） */
+        private const val PROACTIVE_MIN_GAP_MS = 60_000L
+        private const val PROACTIVE_MAX_GAP_MS = 180_000L
+        /** 掷到就会说一句的概率 */
+        private const val PROACTIVE_CHANCE = 0.35
+        /** 生气台词在气泡里停多久（算上 0.5s 出场动画 ≈ 5 秒；比自动收起早 0.4s，避免收尾时闪一下数据） */
+        private const val ANGRY_SPEECH_MS = 4_600L
         /** 气泡出现/消失动画时长 */
         private const val BUBBLE_ANIM_MS = 500L
         /** 多久没点气泡、也没点桌宠 → 自己收起来 */
@@ -143,6 +148,8 @@ class PetService : Service() {
     private var lastSpeechCheck = 0L
     private var lastPeriod = ""
     private var lastBtbuCheck = 0L
+    /** 下一次"要不要主动说话"的时间点 */
+    private var nextProactiveMs = 0L
 
     // ---- 常驻数据气泡（贴在宠物头顶，显示余额 + 下一节课）----
     private var dbRoot: com.dshpet.android.btbu.ThoughtBubble? = null
@@ -759,6 +766,7 @@ class PetService : Service() {
 
         // ---- 台词模式：同一块椭圆，只显示一句碎碎念 ----
         if (isSpeaking()) {
+            dbRoot?.speechMode = true
             head.visibility = View.GONE
             main.visibility = View.GONE
             pill?.visibility = View.GONE
@@ -771,6 +779,7 @@ class PetService : Service() {
         }
 
         // ---- 数据模式 ----
+        dbRoot?.speechMode = false
         head.visibility = View.VISIBLE
         main.visibility = View.VISIBLE
         sub.visibility = View.VISIBLE
@@ -1143,6 +1152,20 @@ class PetService : Service() {
         if (idle > 90_000L && now - lastBubbleMs > 120_000L) {
             // 一小时以上没人理：换成更小声的「busy」嘟囔
             sayFrom(if (idle > 600_000L) "busy" else "idle")
+        }
+
+        // ---- 主动搭话：每隔 1~3 分钟掷一次骰子，掷到就在气泡里说一句 ----
+        if (nextProactiveMs == 0L) nextProactiveMs = now + 20_000L
+        if (now >= nextProactiveMs) {
+            nextProactiveMs = now + PROACTIVE_MIN_GAP_MS +
+                Random.nextLong(PROACTIVE_MAX_GAP_MS - PROACTIVE_MIN_GAP_MS)
+            // 别打断正在说的话、别盖住她正在看的数据页、也别在刚玩过她的时候开口
+            val quiet = !isSpeaking() && !bubbleShown && now - lastInteractMs > 20_000L
+            if (quiet && Random.nextDouble() < PROACTIVE_CHANCE) {
+                val cat = periodOf(hour) ?: "idle"
+                Log.i(TAG, "主动搭话：$cat")
+                sayFrom(cat)
+            }
         }
     }
 
