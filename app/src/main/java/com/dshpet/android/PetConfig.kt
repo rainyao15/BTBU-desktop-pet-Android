@@ -57,15 +57,16 @@ class PetConfig(
 
     companion object {
         /**
-         * 形象模式：直接用 res/drawable-nodpi 里的立绘 + 动图当宠物，**不依赖上游那 106 段动画**。
+         * 形象模式：直接用 res/drawable-nodpi 里的立绘当宠物，**不依赖上游那 106 段动画**。
          *
          * slug 用 "res:" 前缀区分（见 Pet.decodeSlug）：
-         *   res:pet_idle   → 610×610 的鲸鱼娘立绘（静态）
-         *   res:pet_rua    → 128×128 摸摸 GIF
-         *   res:pet_money  → 500×399 钱钱 GIF
-         *   res:pet_idle2  → 另一张立绘
+         *   res:pet_idle   → 610×610 的北工商版立绘（带 BTBU 校徽，静态）
+         *   res:pet_idle2  → 同一个角色的生气立绘，只给「互动」随机动作当反应
          *
-         * 节奏：idle 权重拉到 300（相对固定的 80 随机权重），所以大部分时间就静静趴着，
+         * 历史的摸摸/钱钱 GIF 都是**旧形象**，换上北工商版之后一并删掉了
+         * （不然随机动作会闪回老图），素材还在 git 历史里，需要时能捞回来。
+         *
+         * 节奏：idle 权重拉到 300（相对固定的 1 随机权重），所以大部分时间就静静趴着，
          * 大约每几分钟自己动一下，跟上游挂件的行为一致。
          */
         fun imagePet(ctx: Context): PetConfig {
@@ -76,18 +77,12 @@ class PetConfig(
             val idle = listOf("res:pet_idle")
             return PetConfig(
                 pets = listOf(spec),
-                names = mapOf(
-                    "res:pet_idle" to "待机", "res:pet_idle2" to "歪头",
-                    "res:pet_rua" to "摸摸", "res:pet_money" to "钱钱",
-                ),
-                durations = mapOf(
-                    "res:pet_idle" to 45_000, "res:pet_idle2" to 2_600,
-                    "res:pet_rua" to 1_800, "res:pet_money" to 3_000,
-                ),
+                names = mapOf("res:pet_idle" to "待机", "res:pet_idle2" to "生气"),
+                durations = mapOf("res:pet_idle" to 45_000, "res:pet_idle2" to 2_600),
                 idle = idle,
                 turn = idle,
                 drag = idle,
-                clicks = listOf("res:pet_rua"),
+                clicks = idle,
                 moves = emptyList(),
                 moveMinDist = 60.0,
                 moveMaxDist = 240.0,
@@ -95,7 +90,7 @@ class PetConfig(
                 categories = listOf(
                     AnimCategory(
                         id = "互动", weight = 1,
-                        actions = listOf("res:pet_rua", "res:pet_money", "res:pet_idle2"),
+                        actions = listOf("res:pet_idle2"),
                         noMirror = true,
                     )
                 ),
