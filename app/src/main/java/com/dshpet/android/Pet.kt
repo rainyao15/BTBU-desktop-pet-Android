@@ -47,8 +47,10 @@ class Pet(
         private const val HIDE_DELAY_MS = 12_000L
         /** 躲起来时藏掉多少比例的身子（0.55 = 只露 45%） */
         private const val HIDE_RATIO = 0.55
-        /** 躲藏位移的每帧平滑系数 */
+        /** 躲藏位移的每帧平滑系数（按 16.67ms 一帧标定，实际按真实 dt 换算） */
         private const val HIDE_LERP = 0.18
+        /** 抛掷物理的固定积分步长（秒）：与屏幕刷新率解耦 */
+        private const val PHYS_STEP_S = 1.0 / 120.0
         /** 载入解压/解码动画用的后台线程 */
         private val io = Executors.newSingleThreadExecutor()
         /** 资源前缀：slug 以它开头时走 res 而不是 assets */
@@ -165,6 +167,7 @@ class Pet(
     }
 
     private fun startPress(target: Float) {
+        requestFrame?.invoke()
         pressFromP = pressProgress()
         pressToP = target
         pressAnimStartMs = SystemClock.uptimeMillis()
@@ -172,6 +175,12 @@ class Pet(
     }
 
     private val canvasView = PetCanvas(context)
+
+    /**
+     * 需要连续帧时叫一声（Service 收到就去 Choreographer 排一帧）。
+     * 没有它的话，空闲期（66ms 慢拍）里按下/拖动要等到下一拍才开始动。
+     */
+    var requestFrame: (() -> Unit)? = null
 
     /** 长按回调（Service 里挂上一个「动作菜单」） */
     var onLongPress: (() -> Unit)? = null
@@ -282,6 +291,7 @@ class Pet(
     }
 
     private fun push() {
+        requestFrame?.invoke()
         syncSide()
         onMove(windowX().toInt(), y.toInt(), sizePx, heightPx)
     }
@@ -662,7 +672,11 @@ class Pet(
 
     // ---------------------------------------------------------------- 每帧
 
-    fun tick(): Boolean {
+    /**
+     * 一帧。[dtMs] 是「距上一帧的真实毫秒数」（由 Choreographer 给），
+     * 不再假定 16.67ms —— 60/90/120Hz 下弹跳速度、躲藏平滑都一样，掉帧也不会突然变快。
+     */
+    fun tick(dtMs: Double = 16.0): Boolean {
         val now = SystemClock.uptimeMillis()
         var active = false
 
@@ -685,17 +699,32 @@ class Pet(
                 active = true
             }
             Mode.THROW -> {
+                // 物理用固定小步长（1/120s）积分，渲染跟着 vsync 走：
+                //  · 120Hz 屏上每帧补 1 步、60Hz 屏上补 2 步 → 弹跳轨迹/速度完全一致
+                //  · 掉一帧（dt 变大）也不会「穿墙 / 弹飞」，只是多补几步
                 val b = bounds()
                 val vyBefore = body.vy
-                val r = Physics.throwStep(Body(x, y, body.vx, body.vy), 1.0 / 60.0, b, cfg.physics)
-                x = r.body.x
-                y = r.body.y
-                body = r.body
-                if (r.bounced && abs(r.body.y - b.maxY) < 1.5 && abs(vyBefore) > Physics.SQ_SOFT_SPEED) {
-                    squash(Physics.landingSquash(vyBefore))
+                var remain = (dtMs / 1000.0).coerceIn(0.0, 0.05)
+                var atRest = false
+                var bouncedHard = false
+                while (remain > 0.0) {
+                    val step = min(PHYS_STEP_S, remain)
+                    val r = Physics.throwStep(Body(x, y, body.vx, body.vy), step, b, cfg.physics)
+                    x = r.body.x
+                    y = r.body.y
+                    body = r.body
+                    if (r.bounced && abs(r.body.y - b.maxY) < 1.5 && abs(vyBefore) > Physics.SQ_SOFT_SPEED) {
+                        bouncedHard = true
+                    }
+                    remain -= step
+                    if (r.atRest) {
+                        atRest = true
+                        break
+                    }
                 }
+                if (bouncedHard) squash(Physics.landingSquash(vyBefore))
                 push()
-                if (r.atRest) {
+                if (atRest) {
                     mode = Mode.IDLE
                     snapIfNearEdge()
                     playIdle()
@@ -750,7 +779,10 @@ class Pet(
         }
         if (hideNowPx != hideTargetPx) {
             val diff = hideTargetPx - hideNowPx
-            hideNowPx = if (abs(diff) < 1.0) hideTargetPx else hideNowPx + diff * HIDE_LERP
+            // HIDE_LERP 是「每 16.67ms 走 18%」，换算成本帧的真实比例，
+            // 否则 120Hz 屏上会变成两倍速缩进去、掉帧时又变成慢动作
+            val k = 1.0 - Math.pow(1.0 - HIDE_LERP, (dtMs / 16.6667).coerceIn(0.05, 4.0))
+            hideNowPx = if (abs(diff) < 1.0) hideTargetPx else hideNowPx + diff * k
             push()
             active = true
         }

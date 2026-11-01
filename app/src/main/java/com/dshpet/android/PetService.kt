@@ -19,6 +19,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Choreographer
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
@@ -59,6 +60,12 @@ class PetService : Service() {
         const val ACTION_RELOAD = "com.dshpet.android.action.RELOAD"
         const val ACTION_LINES = "com.dshpet.android.action.LINES"
         const val ACTION_SYNC = "com.dshpet.android.action.SYNC"
+        /** 一句台词在气泡里停留多久 */
+        private const val SPEECH_MS = 3600L
+        /** 空闲时的慢拍（毫秒）：没有东西在动就不要每帧醒 */
+        private const val IDLE_TICK_MS = 66L
+        /** 单帧最多按多少毫秒算（切后台/卡顿回来时别让物理瞬移） */
+        private const val MAX_FRAME_MS = 50.0
 
         fun start(ctx: Context) {
             val i = Intent(ctx, PetService::class.java).setAction(ACTION_START)
@@ -93,13 +100,9 @@ class PetService : Service() {
     private var menuView: View? = null
     private var lines: Lines? = null
 
-    // ---- 台词气泡 ----
-    private var bubbleRoot: View? = null
-    private var bubbleParams: WindowManager.LayoutParams? = null
-    private var bubblePet: Pet? = null
-    private var bubbleUntilMs = 0L
-    private var bubbleX = Int.MIN_VALUE
-    private var bubbleY = Int.MIN_VALUE
+    // ---- 台词（没有单独的气泡窗口了：直接复用下面那块手绘气泡）----
+    private var speechUntilMs = 0L
+    private var speechText = ""
 
     // ---- 碎碎念节奏 ----
     private var lastBubbleMs = 0L
@@ -118,6 +121,8 @@ class PetService : Service() {
     private var dbPill: View? = null
     private var dbTimer: android.widget.Chronometer? = null
     private var dbSig = ""
+    /** 上次气泡重排(measure)的时间：飞行中最多 12 次/秒，别让缩字迭代拖慢帧率 */
+    private var lastBubbleMeasureMs = 0L
     private var tapCount = 0
     private var tapWindowMs = 0L
 
@@ -367,6 +372,7 @@ class PetService : Service() {
                 pet.onLongPress = { showActionMenu(pet) }
                 pet.onTap = { onPetTapped(pet) }
                 pet.onThrown = { onPetThrown(pet) }
+                pet.requestFrame = { requestFrames() }
                 pet.onSettled = { onPetSettled(pet) }
                 pet.onHiddenChange = { hidden -> onPetHiddenChange(pet, hidden) }
 
@@ -433,9 +439,12 @@ class PetService : Service() {
     }
 
     private fun teardown() {
-        handler.removeCallbacks(tickRunnable)
+        choreographer.removeFrameCallback(frameCallback)
+        handler.removeCallbacks(idleTick)
+        frameScheduled = false
         dismissMenu()
-        dismissBubble()
+        speechUntilMs = 0L
+        speechText = ""
         dismissDataBubble()
         try {
             hud?.release()
@@ -470,7 +479,7 @@ class PetService : Service() {
      *   大数字（网 15.00  卡 25.80）
      *   副行（下一节课，浅蓝灰）
      * 底部一条绿色倒计时：正在上课数到下课，否则数到下一节（Chronometer，系统驱动，零耗电）。
-     * 点它 → 打开整周课表。和台词气泡是两个独立窗口，互不打断。
+     * 点它 → 打开整周课表。**全 App 只有这一块气泡**：说台词时把数据行换成一句话，到点切回来。
      */
     /**
      * 常驻气泡：dsh 鲸鱼挂件同款「手绘思考气泡」（几何见 res/drawable/btbu_bubble.xml）。
@@ -478,7 +487,7 @@ class PetService : Service() {
      * 版式照上游：标题（北工商 · 第 N 周）/ 大数字（网 15.00  卡 25.80）/ 副行（下一节课）
      * + 底部绿色倒计时药丸（正在上课数到下课，否则数到下一节；Chronometer 系统驱动，零耗电）。
      * 字号随气泡宽度按上游 u 比例联动，ThoughtBubble 会按内容自动缩字，气泡本体永不变形。
-     * 点它 → 打开整周课表。和台词气泡是两个独立窗口，互不打断。
+     * 点它 → 打开整周课表。**全 App 只有这一块气泡**：说台词时把数据行换成一句话，到点切回来。
      */
     private fun ensureDataBubble() {
         val w = wm ?: return
@@ -537,6 +546,7 @@ class PetService : Service() {
             bind(head, main, sub)
             bindCountdown(chip, timer)
             setOnClickListener {
+                if (isSpeaking()) return@setOnClickListener
                 try {
                     startActivity(
                         Intent(this@PetService, com.dshpet.android.btbu.ScheduleActivity::class.java)
@@ -611,7 +621,36 @@ class PetService : Service() {
         return maxOf(minW, minOf(want, maxW))
     }
 
-    private fun updateDataBubble(force: Boolean = false) {
+    /**
+     * 内容层：按当前模式（数据 / 台词）把三行文字和倒计时药丸写好。
+     * **只改内容，不碰窗口尺寸** —— 尺寸和位置统一由 [relayoutBubble] 管。
+     */
+    private fun applyBubbleContent(force: Boolean = false) {
+        val head = dbHead ?: return
+        val main = dbTitle ?: return
+        val sub = dbBody ?: return
+        val pill = dbPill
+
+        // ---- 台词模式：同一块椭圆，只显示一句碎碎念 ----
+        if (isSpeaking()) {
+            head.visibility = View.GONE
+            main.visibility = View.GONE
+            pill?.visibility = View.GONE
+            dbTimer?.stop()
+            sub.visibility = View.VISIBLE
+            sub.maxLines = 3
+            sub.setTextColor(com.dshpet.android.btbu.ThoughtBubble.INK)
+            sub.text = speechText
+            return
+        }
+
+        // ---- 数据模式 ----
+        head.visibility = View.VISIBLE
+        main.visibility = View.VISIBLE
+        sub.visibility = View.VISIBLE
+        sub.maxLines = 2
+        sub.setTextColor(com.dshpet.android.btbu.ThoughtBubble.HINT_COLOR)
+
         val st = try {
             com.dshpet.android.btbu.BtbuSync.state(this)
         } catch (t: Throwable) {
@@ -621,10 +660,10 @@ class PetService : Service() {
 
         // 倒计时是秒级变化的，不能进 sig 去重 —— 每次进来都重新上弦
         if (hasData) {
-            dbHead?.text = st.headLine()
+            head.text = st.headLine()
             val remain = st.countdownRemainMs()
             if (remain != null && remain > 0) {
-                dbPill?.visibility = View.VISIBLE
+                pill?.visibility = View.VISIBLE
                 dbTimer?.let { t ->
                     t.format = if (st.current != null) "距下课  %s" else "距上课  %s"
                     t.base = android.os.SystemClock.elapsedRealtime() + remain
@@ -632,12 +671,12 @@ class PetService : Service() {
                     t.start()
                 }
             } else {
-                dbPill?.visibility = View.GONE
+                pill?.visibility = View.GONE
                 dbTimer?.stop()
             }
         } else {
-            dbHead?.text = "北工商桌宠"
-            dbPill?.visibility = View.GONE
+            head.text = "北工商桌宠"
+            pill?.visibility = View.GONE
             dbTimer?.stop()
         }
 
@@ -649,9 +688,12 @@ class PetService : Service() {
         if (!force && sig == dbSig) return
         dbSig = sig
         // 大数字拆成两行（"网 15.00" / "卡 25.80"）：一行 15 个字塞进椭圆必然被压到 9px
-        dbTitle?.text = if (hasData) st.balanceLine().replace("  ", "\n") else "未登录"
-        dbBody?.text = if (hasData) st.nextLine() else "点气泡填学号"
+        main.text = if (hasData) st.balanceLine().replace("  ", "\n") else "未登录"
+        sub.text = if (hasData) st.nextLine() else "点气泡填学号"
+    }
 
+    /** 按内容重新量一次尺寸 + 摆放 + 提交（气泡只有一个窗口，尺寸会随台词/数据变化） */
+    private fun relayoutBubble() {
         val box = dbRoot ?: return
         val pet = dbPet ?: return
         val lp = dbParams ?: return
@@ -671,6 +713,11 @@ class PetService : Service() {
         }
     }
 
+    private fun updateDataBubble(force: Boolean = false) {
+        applyBubbleContent(force)
+        relayoutBubble()
+    }
+
     private fun followDataBubble() {
         val box = dbRoot ?: return
         val lp = dbParams ?: return
@@ -682,7 +729,9 @@ class PetService : Service() {
         // 头顶剩多少地方决定气泡多大：变了就重排一次。
         // 量化到 8dp 台阶，否则拖动时每帧都要 measure（ThoughtBubble 里还有 3 轮缩字迭代）。
         val fitted = fittedDataBubbleWidth(pet)
-        if (abs(fitted - lp.width) >= dpPx(8)) {
+        val t = SystemClock.uptimeMillis()
+        if (abs(fitted - lp.width) >= dpPx(8) && t - lastBubbleMeasureMs > 80) {
+            lastBubbleMeasureMs = t
             box.measure(
                 View.MeasureSpec.makeMeasureSpec(fitted, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
@@ -714,103 +763,41 @@ class PetService : Service() {
         dbPill = null
         dbTimer = null
         dbSig = ""
+        speechUntilMs = 0L
+        speechText = ""
     }
 
-    // ------------------------------------------------------------ 台词气泡
+    // ------------------------------------------------------------ 台词（复用同一块气泡，不再有第二种气泡）
 
-    /** 小三角，让气泡看起来是「从她头顶冒出来的」 */
-    private class BubbleTail(ctx: Context) : View(ctx) {
-        private val path = Path()
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xF7FFFFFF.toInt()
-            style = Paint.Style.FILL
-        }
+    /** 现在是不是在说台词（3.6 秒内） */
+    private fun isSpeaking(): Boolean = SystemClock.uptimeMillis() < speechUntilMs
 
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            path.reset()
-            path.moveTo(0f, 0f)
-            path.lineTo(width.toFloat(), 0f)
-            path.lineTo(width / 2f, height.toFloat())
-            path.close()
-            canvas.drawPath(path, paint)
-        }
+    /**
+     * 说一句：**不开新窗口**，直接把手绘气泡切成「台词模式」。
+     *
+     * 以前这里会另开一个白色圆角矩形 + 小三角的窗口（近似矩形、半透明描边），
+     * 和数据气泡锚点完全重合，只能靠 visibility 互相遮挡 —— 视觉上是两套 UI。
+     * 现在只有一块气泡：说台词时把数据行藏起来、台词打在同一个椭圆里，到点自动切回数据。
+     */
+    private fun say(text: String) {
+        if (dbRoot == null || dbPet == null) return      // 气泡没了就不说，不另开窗口
+        if (text.isBlank()) return
+        val now = SystemClock.uptimeMillis()
+        speechText = text
+        speechUntilMs = now + SPEECH_MS
+        lastBubbleMs = now
+        applyBubbleContent(true)
+        relayoutBubble()
+        Diag.record(this, "台词「$text」")
     }
 
-    private fun say(pet: Pet, text: String) {
-        val w = wm ?: return
-        dismissBubble()
-        // 台词气泡和数据气泡锚点相同，会完全叠住：说台词时先把数据气泡藏起来
-        try {
-            dbRoot?.visibility = View.GONE
-        } catch (_: Throwable) {
-        }
-        val d = resources.displayMetrics.density
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-        }
-        val tv = TextView(this).apply {
-            this.text = text
-            setTextColor(0xFF16223B.toInt())
-            textSize = 14f
-            includeFontPadding = false
-            setPadding((14 * d).toInt(), (9 * d).toInt(), (14 * d).toInt(), (9 * d).toInt())
-            maxWidth = (232 * d).toInt()
-            background = GradientDrawable().apply {
-                cornerRadius = 16f * d
-                setColor(0xF7FFFFFF.toInt())
-                setStroke((1.5f * d).toInt(), 0x664E6BFF.toInt())
-            }
-        }
-        box.addView(
-            tv,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ),
-        )
-        box.addView(
-            BubbleTail(this),
-            LinearLayout.LayoutParams((14 * d).toInt(), (8 * d).toInt()),
-        )
-        // 先量一次，才能算出「贴在她头顶」的位置；窗口直接用量出来的固定尺寸，
-        // 交给系统按 WRAP_CONTENT 再量一次时，部分 ROM 会量成一条细缝（文字就看不见了）。
-        val maxW = (resources.displayMetrics.widthPixels * 0.8f).toInt()
-        box.measure(
-            View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.AT_MOST),
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-        )
-        val bw = box.measuredWidth.coerceAtLeast((48 * d).toInt())
-        val bh = box.measuredHeight.coerceAtLeast((28 * d).toInt())
-
-        val lp = WindowManager.LayoutParams(
-            bw,
-            bh,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT,
-        )
-        lp.gravity = Gravity.TOP or Gravity.START
-        placeBubble(lp, bw, bh, pet)
-        Diag.record(this, "气泡 ${bw}x${bh} @(${lp.x},${lp.y}) 「$text」")
-
-        try {
-            w.addView(box, lp)
-            val now = SystemClock.uptimeMillis()
-            bubbleRoot = box
-            bubbleParams = lp
-            bubblePet = pet
-            bubbleUntilMs = now + 3600L
-            lastBubbleMs = now
-        } catch (t: Throwable) {
-            Diag.record(this, "气泡创建失败", t)
-            bubbleRoot = null
-            bubbleParams = null
-            bubblePet = null
-        }
+    /** 台词结束：恢复数据行 */
+    private fun endSpeech() {
+        if (!isSpeaking() && speechText.isEmpty()) return
+        speechUntilMs = 0L
+        speechText = ""
+        applyBubbleContent(true)
+        relayoutBubble()
     }
 
     /**
@@ -851,39 +838,6 @@ class PetService : Service() {
         lp.y = by
     }
 
-    private fun followBubble() {
-        val v = bubbleRoot ?: return
-        val lp = bubbleParams ?: return
-        val pet = bubblePet ?: return
-        if (SystemClock.uptimeMillis() > bubbleUntilMs) {
-            dismissBubble()
-            return
-        }
-        val oldX = lp.x
-        val oldY = lp.y
-        placeBubble(lp, v.measuredWidth, v.measuredHeight, pet)
-        if (lp.x == oldX && lp.y == oldY) return
-        try {
-            wm?.updateViewLayout(v, lp)
-        } catch (_: Throwable) {
-        }
-    }
-
-    private fun dismissBubble() {
-        try {
-            dbRoot?.visibility = View.VISIBLE
-        } catch (_: Throwable) {
-        }
-        val v = bubbleRoot ?: return
-        bubbleRoot = null
-        bubbleParams = null
-        bubblePet = null
-        try {
-            wm?.removeView(v)
-        } catch (_: Throwable) {
-        }
-    }
-
     // ------------------------------------------------------------ 碎碎念触发
 
     /** 说一句 / 说某类情境的一句。force 只跳过冷却，不跳过总开关（summon 除外）。 */
@@ -891,11 +845,13 @@ class PetService : Service() {
         try {
             if (category != "summon" && !Prefs.bubbleOn(this)) return
             val l = lines ?: return
-            val pet = bubblePet ?: held.firstOrNull()?.pet ?: return
+            val pet = dbPet ?: held.firstOrNull()?.pet ?: return
             val now = SystemClock.uptimeMillis()
             if (!force && now - lastBubbleMs < 20_000L) return
             val text = l.pick(category) ?: return
-            say(pet, text)
+            // 气泡只挂在第一只身上（多只宠物时不抢别人）
+            if (dbPet !== pet) return
+            say(text)
         } catch (t: Throwable) {
             Diag.record(this, "sayFrom($category) 失败", t)
         }
@@ -929,7 +885,7 @@ class PetService : Service() {
         if (hidden) {
             handler.postDelayed({
                 // 缩进去之后再开口，避免气泡跟着一起被藏掉半截
-                if (bubbleRoot == null) sayFrom("edge")
+                if (!isSpeaking()) sayFrom("edge")
             }, 700L)
         }
     }
@@ -948,7 +904,7 @@ class PetService : Service() {
         val pet = held.firstOrNull()?.pet ?: return
         val alert = BtbuAlerts.pick(this) ?: return
         try {
-            say(pet, alert.text)
+            say(alert.text)
             BtbuAlerts.mark(this, alert.key)
         } catch (t: Throwable) {
             Diag.record(this, "数据提醒失败", t)
@@ -1133,55 +1089,145 @@ class PetService : Service() {
         }
     }
 
-    // ------------------------------------------------------------ 帧循环
+    // ------------------------------------------------------------ 帧循环（跟着屏幕刷新率走）
 
-    private val tickRunnable = object : Runnable {
-        override fun run() {
-            var active = false
-            for (h in held) {
-                try {
-                    if (h.pet.tick()) active = true
-                } catch (t: Throwable) {
-                    Diag.record(this@PetService, "tick 异常", t)
+    /**
+     * 帧循环用 [Choreographer] 而不是 `Handler.postDelayed(16)`。
+     *
+     * 为什么：postDelayed 只是"16 毫秒后再跑一次"，跟屏幕的 vsync 毫无关系 ——
+     * 实际间隔常年落在 17~25ms（主线程还有别的事），也就是 40~58fps，
+     * 而且相位是乱的，肉眼就是"甩出去以后一顿一顿的"。尤其 90/120Hz 屏上，
+     * 它永远只有 60，且与刷新不同步，看起来比 60Hz 屏更抖。
+     *
+     * 换成 Choreographer 之后：
+     *  · 回调就在 vsync 上，屏幕 60Hz 就给 60 帧、120Hz 就给 120 帧；
+     *  · 每帧带 frameTimeNanos，宠物拿到的是**真实 dt**，物理不再假定 16.67ms；
+     *  · 没有任何东西在动时不再每帧醒（掉到 66ms 慢拍），省电。
+     */
+    private val choreographer: Choreographer get() = Choreographer.getInstance()
+    private var frameScheduled = false
+    private var lastFrameNs = 0L
+
+    private val frameCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            frameScheduled = false
+            val dtMs = if (lastFrameNs == 0L) {
+                1000.0 / 60.0
+            } else {
+                (frameTimeNanos - lastFrameNs) / 1_000_000.0
+            }
+            lastFrameNs = frameTimeNanos
+            val active = tickAll(dtMs.coerceIn(2.0, MAX_FRAME_MS))
+            if (active) {
+                fpsSample(frameTimeNanos)
+                requestFrames()
+            } else {
+                lastFrameNs = 0L
+                // 这一帧里 push() 可能已经又要了一帧（比如刚好收尾），别再多挂一个慢拍
+                if (!frameScheduled) {
+                    handler.removeCallbacks(idleTick)
+                    handler.postDelayed(idleTick, IDLE_TICK_MS)
                 }
             }
-            try {
-                followBubble()
-            } catch (t: Throwable) {
-                Diag.record(this@PetService, "followBubble 异常", t)
-            }
-            try {
-                followDataBubble()
-            } catch (t: Throwable) {
-                Diag.record(this@PetService, "followDataBubble 异常", t)
-            }
-            val n = SystemClock.uptimeMillis()
-            if (n - lastSpeechCheck > 1000L) {
-                lastSpeechCheck = n
-                try {
-                    tickSpeech(n)
-                } catch (t: Throwable) {
-                    Diag.record(this@PetService, "tickSpeech 异常", t)
-                }
-            }
-            // 每 60 秒看一次"有没有值得对真实数据反应的事"（余额、限速、快上课）
-            if (n - lastBtbuCheck > 60_000L) {
-                lastBtbuCheck = n
-                try {
-                    tickBtbu()
-                    updateDataBubble()
-                    updateNotification()
-                } catch (t: Throwable) {
-                    Diag.record(this@PetService, "tickBtbu 异常", t)
-                }
-            }
-            handler.postDelayed(this, if (active) 16L else 66L)
         }
     }
 
+    /** 空闲慢拍：只做台词/BTbu 那种低频检查；发现又有东西要动就切回 vsync */
+    private val idleTick = object : Runnable {
+        override fun run() {
+            if (tickAll(IDLE_TICK_MS.toDouble())) {
+                requestFrames()
+            } else if (!frameScheduled) {
+                handler.postDelayed(this, IDLE_TICK_MS)
+            }
+        }
+    }
+
+    /** 要下一帧。可重入（一帧里被叫多次也只排一帧）。 */
+    private fun requestFrames() {
+        if (frameScheduled) return
+        frameScheduled = true
+        handler.removeCallbacks(idleTick)
+        choreographer.postFrameCallback(frameCallback)
+    }
+
+    private var fpsFrames = 0
+    private var fpsWindowStartMs = 0L
+
+    /** 每 2 秒在 logcat 打一条实测帧率，方便确认到底有没有跑满屏幕刷新率 */
+    private fun fpsSample(frameTimeNanos: Long) {
+        val nowMs = frameTimeNanos / 1_000_000
+        fpsFrames++
+        if (fpsWindowStartMs == 0L) {
+            fpsWindowStartMs = nowMs
+            return
+        }
+        val span = nowMs - fpsWindowStartMs
+        if (span >= 2000) {
+            val fps = fpsFrames * 1000.0 / span
+            Log.i(TAG, "帧率自检 %.1f fps（屏幕 %.0fHz）".format(fps, displayHz()))
+            fpsFrames = 0
+            fpsWindowStartMs = nowMs
+        }
+    }
+
+    /** 屏幕刷新率（拿不到就返回 0） */
+    private fun displayHz(): Float = try {
+        @Suppress("DEPRECATION")
+        (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay.refreshRate
+    } catch (t: Throwable) {
+        0f
+    }
+
+    /** 一帧的全部工作；返回 true = 还有东西在动，需要继续要帧 */
+    private fun tickAll(dtMs: Double): Boolean {
+        var active = false
+        for (h in held) {
+            try {
+                if (h.pet.tick(dtMs)) active = true
+            } catch (t: Throwable) {
+                Diag.record(this@PetService, "tick 异常", t)
+            }
+        }
+        // 台词到点 → 切回数据（同一块气泡，只是换内容）
+        if (speechText.isNotEmpty() && !isSpeaking()) {
+            try {
+                endSpeech()
+            } catch (t: Throwable) {
+                Diag.record(this@PetService, "结束台词异常", t)
+            }
+        }
+        try {
+            followDataBubble()
+        } catch (t: Throwable) {
+            Diag.record(this@PetService, "followDataBubble 异常", t)
+        }
+        val n = SystemClock.uptimeMillis()
+        if (n - lastSpeechCheck > 1000L) {
+            lastSpeechCheck = n
+            try {
+                tickSpeech(n)
+            } catch (t: Throwable) {
+                Diag.record(this@PetService, "tickSpeech 异常", t)
+            }
+        }
+        // 每 60 秒看一次"有没有值得对真实数据反应的事"（余额、限速、快上课）
+        if (n - lastBtbuCheck > 60_000L) {
+            lastBtbuCheck = n
+            try {
+                tickBtbu()
+                updateDataBubble()
+                updateNotification()
+            } catch (t: Throwable) {
+                Diag.record(this@PetService, "tickBtbu 异常", t)
+            }
+        }
+        return active
+    }
+
     private fun startTicker() {
-        handler.removeCallbacks(tickRunnable)
-        handler.post(tickRunnable)
+        handler.removeCallbacks(idleTick)
+        requestFrames()
     }
 
     override fun onDestroy() {
